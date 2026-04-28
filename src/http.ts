@@ -63,7 +63,23 @@ const httpServer = createHttpServer((req, res) => {
 
   const transport = new SSEServerTransport('/mcp', res)
 
+  // SSE keepalive: many proxies (CloudFront, ALB, nginx default 60s) close
+  // idle connections, which silently breaks long-lived MCP sessions. Emit a
+  // comment-frame heartbeat every 25s so the connection stays warm.
+  const KEEPALIVE_MS = 25_000
+  const keepalive = setInterval(() => {
+    try {
+      // SSE comments start with ":" and are ignored by the client parser.
+      res.write(`: keepalive ${Date.now()}\n\n`)
+    } catch {
+      // res may already be closed; cleanup will run via the 'close' handler.
+    }
+  }, KEEPALIVE_MS)
+  // Don't keep the event loop alive solely for the heartbeat.
+  keepalive.unref?.()
+
   const cleanup = (): void => {
+    clearInterval(keepalive)
     transport.close().catch(() => undefined)
     server.close().catch(() => undefined)
   }

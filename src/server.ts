@@ -24,33 +24,51 @@ const SearchInput = z.object({
   limit: z.number().int().min(1).max(50).default(8).describe('Max number of memories to return.'),
   actor_id: z
     .string()
+    .min(1)
+    .max(256)
     .optional()
     .describe('Optional actor scope (defaults to the configured actor).'),
 })
 
+// Cap metadata size so a malicious or buggy client cannot push a 10MB blob
+// through the MCP boundary (the upstream API enforces its own limits, but
+// we'd rather reject early than waste a round-trip).
+const METADATA_MAX_SERIALIZED_BYTES = 16 * 1024
+const boundedMetadata = z
+  .record(z.unknown())
+  .refine(
+    (m) => {
+      try {
+        return Buffer.byteLength(JSON.stringify(m), 'utf8') <= METADATA_MAX_SERIALIZED_BYTES
+      } catch {
+        return false
+      }
+    },
+    { message: `metadata exceeds ${METADATA_MAX_SERIALIZED_BYTES} bytes when serialized` },
+  )
+
 const AddInput = z.object({
   content: z.string().min(1).max(10_000).describe('The fact or memory to store.'),
-  metadata: z
-    .record(z.unknown())
+  metadata: boundedMetadata
     .optional()
-    .describe('Arbitrary JSON metadata (tags, source, etc.).'),
-  actor_id: z.string().optional(),
+    .describe('Arbitrary JSON metadata (tags, source, etc.). Max 16KB serialized.'),
+  actor_id: z.string().min(1).max(256).optional(),
 })
 
 const UpdateInput = z.object({
-  id: z.string().min(1).describe('Memory ID returned by memory_add or memory_search.'),
+  id: z.string().min(1).max(256).describe('Memory ID returned by memory_add or memory_search.'),
   content: z.string().min(1).max(10_000).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: boundedMetadata.optional(),
 })
 
 const DeleteInput = z.object({
-  id: z.string().min(1).describe('Memory ID to delete.'),
+  id: z.string().min(1).max(256).describe('Memory ID to delete.'),
 })
 
 const ListInput = z.object({
   limit: z.number().int().min(1).max(100).default(20),
-  cursor: z.string().optional(),
-  actor_id: z.string().optional(),
+  cursor: z.string().min(1).max(1024).optional(),
+  actor_id: z.string().min(1).max(256).optional(),
 })
 
 const TOOLS: Tool[] = [
