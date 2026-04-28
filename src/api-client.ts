@@ -80,7 +80,7 @@ export class LedgerMemApiClient {
     return this.request<SearchResponse>('POST', '/v1/search', {
       query: input.query,
       limit: input.limit ?? 8,
-      ...(input.actorId ? { actorId: input.actorId } : {}),
+      ...(input.actorId !== undefined ? { actorId: input.actorId } : {}),
     })
   }
 
@@ -91,8 +91,8 @@ export class LedgerMemApiClient {
   }): Promise<Memory> {
     return this.request<Memory>('POST', '/v1/memories', {
       content: input.content,
-      ...(input.metadata ? { metadata: input.metadata } : {}),
-      ...(input.actorId ? { actorId: input.actorId } : {}),
+      ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+      ...(input.actorId !== undefined ? { actorId: input.actorId } : {}),
     })
   }
 
@@ -116,9 +116,9 @@ export class LedgerMemApiClient {
     actorId?: string
   }): Promise<{ items: Memory[]; nextCursor: string | null }> {
     const params = new URLSearchParams()
-    if (input?.limit) params.set('limit', String(input.limit))
-    if (input?.cursor) params.set('cursor', input.cursor)
-    if (input?.actorId) params.set('actorId', input.actorId)
+    if (input?.limit !== undefined) params.set('limit', String(input.limit))
+    if (input?.cursor !== undefined) params.set('cursor', input.cursor)
+    if (input?.actorId !== undefined) params.set('actorId', input.actorId)
     const qs = params.toString()
     return this.request('GET', `/v1/memories${qs ? `?${qs}` : ''}`)
   }
@@ -133,7 +133,7 @@ export class LedgerMemApiClient {
     try {
       const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
-        headers: this.headers,
+        headers: { ...this.headers },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: ctrl.signal,
       })
@@ -145,6 +145,13 @@ export class LedgerMemApiClient {
             ? String((parsed as { message: unknown }).message)
             : null) ?? `HTTP ${res.status} ${res.statusText}`
         throw new LedgerMemApiError(msg, res.status, parsed)
+      }
+      if (parsed !== undefined && typeof parsed !== 'object') {
+        throw new LedgerMemApiError(
+          `Expected JSON object response, got: ${typeof parsed}`,
+          res.status,
+          parsed,
+        )
       }
       return parsed as T
     } finally {

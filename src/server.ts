@@ -10,7 +10,9 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import {
   CallToolRequestSchema,
+  ErrorCode,
   ListToolsRequestSchema,
+  McpError,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
@@ -136,12 +138,15 @@ export function createServer(cfg: ApiClientConfig): Server {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       }
     } catch (err) {
+      if (err instanceof McpError) throw err
       const message =
         err instanceof LedgerMemApiError
           ? `LedgerMem API error (${err.status}): ${err.message}`
-          : err instanceof Error
-            ? err.message
-            : 'Unknown error'
+          : err instanceof z.ZodError
+            ? `Invalid arguments: ${err.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')}`
+            : err instanceof Error
+              ? err.message
+              : 'Unknown error'
       return {
         isError: true,
         content: [{ type: 'text', text: message }],
@@ -179,6 +184,6 @@ async function dispatch(
       return api.listMemories({ limit: i.limit, cursor: i.cursor, actorId: i.actor_id })
     }
     default:
-      throw new Error(`Unknown tool: ${name}`)
+      throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`)
   }
 }

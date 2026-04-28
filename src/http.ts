@@ -27,7 +27,13 @@ const httpServer = createHttpServer((req, res) => {
 
   if (url.pathname !== '/mcp') {
     res.writeHead(404, { 'content-type': 'text/plain' })
-    res.end('Not found. POST /mcp for the MCP endpoint, GET /healthz for liveness.\n')
+    res.end('Not found. GET /mcp for the SSE stream, GET /healthz for liveness.\n')
+    return
+  }
+
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    res.writeHead(405, { 'content-type': 'text/plain', allow: 'GET, POST' })
+    res.end('Method not allowed.\n')
     return
   }
 
@@ -56,8 +62,21 @@ const httpServer = createHttpServer((req, res) => {
   })
 
   const transport = new SSEServerTransport('/mcp', res)
+
+  const cleanup = (): void => {
+    transport.close().catch(() => undefined)
+    server.close().catch(() => undefined)
+  }
+  res.on('close', cleanup)
+  res.on('error', cleanup)
+
   server.connect(transport).catch((err) => {
     process.stderr.write(`MCP transport error: ${err instanceof Error ? err.message : err}\n`)
+    cleanup()
+    if (!res.headersSent) {
+      res.writeHead(500, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'MCP transport failed to initialize' }))
+    }
   })
 })
 
