@@ -67,7 +67,15 @@ const httpServer = createHttpServer((req, res) => {
   // idle connections, which silently breaks long-lived MCP sessions. Emit a
   // comment-frame heartbeat every 25s so the connection stays warm.
   const KEEPALIVE_MS = 25_000
+  // Track tear-down so the heartbeat cannot race with cleanup. Without this
+  // guard, `setInterval` can fire on the same tick that the client closes the
+  // socket: clearInterval is queued, the timer callback is already running,
+  // and `res.write` lands on a half-closed transport — Node throws
+  // ERR_STREAM_WRITE_AFTER_END (uncaught here, the empty catch only swallows
+  // synchronous errors; the actual error fires on the 'error' event).
+  let closed = false
   const keepalive = setInterval(() => {
+    if (closed || res.writableEnded || res.destroyed) return
     try {
       // SSE comments start with ":" and are ignored by the client parser.
       res.write(`: keepalive ${Date.now()}\n\n`)
@@ -79,6 +87,8 @@ const httpServer = createHttpServer((req, res) => {
   keepalive.unref?.()
 
   const cleanup = (): void => {
+    if (closed) return
+    closed = true
     clearInterval(keepalive)
     transport.close().catch(() => undefined)
     server.close().catch(() => undefined)
