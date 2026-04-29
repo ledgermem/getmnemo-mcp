@@ -1,14 +1,14 @@
 {
-  "name": "@ledgermem/mcp-server",
+  "name": "@getmnemo/mcp-server",
   "version": "0.1.0",
-  "description": "Model Context Protocol server for LedgerMem Memory — exposes search/add/update/delete tools to Claude Desktop, Cursor, Windsurf, VS Code, Zed.",
+  "description": "Model Context Protocol server for Mnemo Memory — exposes search/add/update/delete tools to Claude Desktop, Cursor, Windsurf, VS Code, Zed.",
   "type": "module",
   "license": "MIT",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "ledgermem-mcp": "dist/cli.js"
+    "getmnemo-mcp": "dist/cli.js"
   },
   "files": [
     "dist",

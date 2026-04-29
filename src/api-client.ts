@@ -1,8 +1,8 @@
 /**
- * Thin REST client for the LedgerMem Memory API.
+ * Thin REST client for the Mnemo Memory API.
  *
  * This duplicates the surface area we need for MCP tools — we deliberately
- * do NOT depend on @ledgermem/memory here so this server can ship even if
+ * do NOT depend on @getmnemo/memory here so this server can ship even if
  * the JS SDK lags behind. When the SDK stabilises, swap this for it.
  */
 
@@ -40,18 +40,18 @@ export type ApiClientConfig = {
   timeoutMs?: number
 }
 
-export class LedgerMemApiError extends Error {
+export class MnemoApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly body?: unknown,
   ) {
     super(message)
-    this.name = 'LedgerMemApiError'
+    this.name = 'MnemoApiError'
   }
 }
 
-export class LedgerMemApiClient {
+export class MnemoApiClient {
   private readonly baseUrl: string
   private readonly headers: Record<string, string>
   private readonly fetchImpl: typeof fetch
@@ -65,7 +65,7 @@ export class LedgerMemApiClient {
       'authorization': `Bearer ${cfg.apiKey}`,
       'x-workspace-id': cfg.workspaceId,
       'content-type': 'application/json',
-      'user-agent': '@ledgermem/mcp-server',
+      'user-agent': '@getmnemo/mcp-server',
       ...(cfg.actorId ? { 'x-actor-id': cfg.actorId } : {}),
     }
     this.fetchImpl = cfg.fetch ?? fetch
@@ -144,10 +144,10 @@ export class LedgerMemApiClient {
           (parsed && typeof parsed === 'object' && 'message' in parsed
             ? String((parsed as { message: unknown }).message)
             : null) ?? `HTTP ${res.status} ${res.statusText}`
-        throw new LedgerMemApiError(msg, res.status, parsed)
+        throw new MnemoApiError(msg, res.status, parsed)
       }
       if (parsed !== undefined && typeof parsed !== 'object') {
-        throw new LedgerMemApiError(
+        throw new MnemoApiError(
           `Expected JSON object response, got: ${typeof parsed}`,
           res.status,
           parsed,

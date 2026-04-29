@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * HTTP/SSE entry-point for hosted MCP at mcp.proofly.dev.
+ * HTTP/SSE entry-point for hosted MCP at mcp.getmnemo.xyz.
  *
- * Each connecting client supplies its own LEDGERMEM_API_KEY and
- * LEDGERMEM_WORKSPACE_ID via OAuth (Phase 2) or via custom headers
- * `x-ledgermem-api-key` + `x-ledgermem-workspace-id` (Phase 1, dev-only).
+ * Each connecting client supplies its own GETMNEMO_API_KEY and
+ * GETMNEMO_WORKSPACE_ID via OAuth (Phase 2) or via custom headers
+ * `x-getmnemo-api-key` + `x-getmnemo-workspace-id` (Phase 1, dev-only).
  *
  * Listens on PORT (default 8787). Healthcheck at GET /healthz.
  */
@@ -14,14 +14,14 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js'
 import { createServer } from './server.js'
 
 const PORT = Number(process.env.PORT ?? 8787)
-const DEFAULT_API_URL = process.env.LEDGERMEM_API_URL ?? 'https://api.proofly.dev'
+const DEFAULT_API_URL = process.env.GETMNEMO_API_URL ?? 'https://api.getmnemo.xyz'
 
 const httpServer = createHttpServer((req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
 
   if (url.pathname === '/healthz') {
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ status: 'ok', service: 'ledgermem-mcp' }))
+    res.end(JSON.stringify({ status: 'ok', service: 'getmnemo-mcp' }))
     return
   }
 
@@ -38,16 +38,16 @@ const httpServer = createHttpServer((req, res) => {
   }
 
   const apiKey =
-    (req.headers['x-ledgermem-api-key'] as string | undefined) ?? process.env.LEDGERMEM_API_KEY
+    (req.headers['x-getmnemo-api-key'] as string | undefined) ?? process.env.GETMNEMO_API_KEY
   const workspaceId =
-    (req.headers['x-ledgermem-workspace-id'] as string | undefined) ??
-    process.env.LEDGERMEM_WORKSPACE_ID
+    (req.headers['x-getmnemo-workspace-id'] as string | undefined) ??
+    process.env.GETMNEMO_WORKSPACE_ID
 
   if (!apiKey || !workspaceId) {
     res.writeHead(401, { 'content-type': 'application/json' })
     res.end(
       JSON.stringify({
-        error: 'Missing x-ledgermem-api-key and/or x-ledgermem-workspace-id headers.',
+        error: 'Missing x-getmnemo-api-key and/or x-getmnemo-workspace-id headers.',
         hint: 'OAuth flow lands in v0.2; headers work today for trusted clients.',
       }),
     )
@@ -58,7 +58,7 @@ const httpServer = createHttpServer((req, res) => {
     baseUrl: DEFAULT_API_URL,
     apiKey,
     workspaceId,
-    actorId: req.headers['x-ledgermem-actor-id'] as string | undefined,
+    actorId: req.headers['x-getmnemo-actor-id'] as string | undefined,
   })
 
   const transport = new SSEServerTransport('/mcp', res)
@@ -107,7 +107,7 @@ const httpServer = createHttpServer((req, res) => {
 })
 
 httpServer.listen(PORT, () => {
-  process.stdout.write(`LedgerMem MCP HTTP listening on :${PORT}\n`)
+  process.stdout.write(`Mnemo MCP HTTP listening on :${PORT}\n`)
 })
 
 process.on('SIGTERM', () => httpServer.close(() => process.exit(0)))

@@ -17,7 +17,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 
-import { LedgerMemApiClient, type ApiClientConfig, LedgerMemApiError } from './api-client.js'
+import { MnemoApiClient, type ApiClientConfig, MnemoApiError } from './api-client.js'
 
 const SearchInput = z.object({
   query: z.string().min(1).max(2000).describe('Natural-language search query.'),
@@ -75,7 +75,7 @@ const TOOLS: Tool[] = [
   {
     name: 'memory_search',
     description:
-      'Search the LedgerMem memory store for facts relevant to a query. Returns ranked hits with content, score, and source citations. Use this BEFORE answering any question that might require remembered context.',
+      'Search the Mnemo memory store for facts relevant to a query. Returns ranked hits with content, score, and source citations. Use this BEFORE answering any question that might require remembered context.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -140,9 +140,9 @@ const TOOLS: Tool[] = [
 ]
 
 export function createServer(cfg: ApiClientConfig): Server {
-  const api = new LedgerMemApiClient(cfg)
+  const api = new MnemoApiClient(cfg)
   const server = new Server(
-    { name: 'ledgermem', version: '0.1.0' },
+    { name: 'getmnemo', version: '0.1.0' },
     { capabilities: { tools: {} } },
   )
 
@@ -158,8 +158,8 @@ export function createServer(cfg: ApiClientConfig): Server {
     } catch (err) {
       if (err instanceof McpError) throw err
       const message =
-        err instanceof LedgerMemApiError
-          ? `LedgerMem API error (${err.status}): ${err.message}`
+        err instanceof MnemoApiError
+          ? `Mnemo API error (${err.status}): ${err.message}`
           : err instanceof z.ZodError
             ? `Invalid arguments: ${err.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')}`
             : err instanceof Error
@@ -176,7 +176,7 @@ export function createServer(cfg: ApiClientConfig): Server {
 }
 
 async function dispatch(
-  api: LedgerMemApiClient,
+  api: MnemoApiClient,
   name: string,
   raw: Record<string, unknown>,
 ): Promise<unknown> {

@@ -1,7 +1,7 @@
 export { createServer } from './server.js'
 export {
-  LedgerMemApiClient,
-  LedgerMemApiError,
+  MnemoApiClient,
+  MnemoApiError,
   type ApiClientConfig,
   type Memory,
   type SearchHit,
