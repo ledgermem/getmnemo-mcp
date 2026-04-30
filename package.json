@@ -1,5 +1,5 @@
 {
-  "name": "@getmnemo/mcp-server",
+  "name": "@mnemo/mcp-server",
   "version": "0.1.0",
   "description": "Model Context Protocol server for Mnemo Memory — exposes search/add/update/delete tools to Claude Desktop, Cursor, Windsurf, VS Code, Zed.",
   "type": "module",

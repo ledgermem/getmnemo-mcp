@@ -2,7 +2,7 @@
  * Thin REST client for the Mnemo Memory API.
  *
  * This duplicates the surface area we need for MCP tools — we deliberately
- * do NOT depend on @getmnemo/memory here so this server can ship even if
+ * do NOT depend on @mnemo/memory here so this server can ship even if
  * the JS SDK lags behind. When the SDK stabilises, swap this for it.
  */
 
@@ -65,7 +65,7 @@ export class MnemoApiClient {
       'authorization': `Bearer ${cfg.apiKey}`,
       'x-workspace-id': cfg.workspaceId,
       'content-type': 'application/json',
-      'user-agent': '@getmnemo/mcp-server',
+      'user-agent': '@mnemo/mcp-server',
       ...(cfg.actorId ? { 'x-actor-id': cfg.actorId } : {}),
     }
     this.fetchImpl = cfg.fetch ?? fetch
