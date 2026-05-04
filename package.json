@@ -1,5 +1,5 @@
 {
-  "name": "@mnemo/mcp-server",
+  "name": "getmnemo-mcp",
   "version": "0.1.0",
   "description": "Model Context Protocol server for Mnemo Memory — exposes search/add/update/delete tools to Claude Desktop, Cursor, Windsurf, VS Code, Zed.",
   "type": "module",
@@ -42,5 +42,10 @@
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ledgermem/getmnemo-mcp.git"
+  },
+  "homepage": "https://getmnemo.xyz"
 }
