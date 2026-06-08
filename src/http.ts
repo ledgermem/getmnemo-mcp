@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * HTTP/SSE entry-point for hosted MCP at mcp.getmnemo.xyz.
+ * HTTP/SSE entry-point for hosted MCP at mcp.mnemohq.com.
  *
  * Each connecting client supplies its own GETMNEMO_API_KEY and
  * GETMNEMO_WORKSPACE_ID via OAuth (Phase 2) or via custom headers
@@ -14,7 +14,7 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js'
 import { createServer } from './server.js'
 
 const PORT = Number(process.env.PORT ?? 8787)
-const DEFAULT_API_URL = process.env.GETMNEMO_API_URL ?? 'https://api.getmnemo.xyz'
+const DEFAULT_API_URL = process.env.GETMNEMO_API_URL ?? 'https://api.mnemohq.com'
 
 const httpServer = createHttpServer((req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
