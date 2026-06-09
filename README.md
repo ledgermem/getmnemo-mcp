@@ -1,6 +1,6 @@
-# @ledgermem/mcp-server
+# getmnemo-mcp
 
-Model Context Protocol server for [LedgerMem Memory](https://proofly.dev) — exposes long-term memory tools to any MCP client (Claude Desktop, Cursor, Windsurf, VS Code, Zed).
+Model Context Protocol server for [Mnemo Memory](https://mnemohq.com) — exposes long-term memory tools to any MCP client (Claude Desktop, Cursor, Windsurf, VS Code, Zed).
 
 ## Tools
 
@@ -19,7 +19,7 @@ All calls are scoped to a workspace and (optionally) an actor.
 ### Claude Desktop / Cursor / Windsurf / VS Code / Zed
 
 ```bash
-npx -y @ledgermem/mcp-server
+npx -y getmnemo-mcp
 ```
 
 Or wire it into the client config directly. Example for Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`):
@@ -27,33 +27,33 @@ Or wire it into the client config directly. Example for Claude Desktop (`~/Libra
 ```json
 {
   "mcpServers": {
-    "ledgermem": {
+    "getmnemo": {
       "command": "npx",
-      "args": ["-y", "@ledgermem/mcp-server"],
+      "args": ["-y", "getmnemo-mcp"],
       "env": {
-        "LEDGERMEM_API_KEY": "lk_live_...",
-        "LEDGERMEM_WORKSPACE_ID": "ws_..."
+        "GETMNEMO_API_KEY": "lk_live_...",
+        "GETMNEMO_WORKSPACE_ID": "ws_..."
       }
     }
   }
 }
 ```
 
-Get an API key at <https://app.proofly.dev/settings/api-keys>.
+Get an API key at <https://app.mnemohq.com/settings/api-keys>.
 
-### Hosted (HTTP/SSE) at `mcp.proofly.dev`
+### Hosted (HTTP/SSE) at `mcp.mnemohq.com`
 
 ```bash
-npx -y install-mcp@latest https://mcp.proofly.dev/mcp --client claude
+npx -y install-mcp@latest https://mcp.mnemohq.com/mcp --client claude
 ```
 
-(OAuth flow lands in v0.2 — until then the hosted endpoint accepts `x-ledgermem-api-key` + `x-ledgermem-workspace-id` headers from trusted clients.)
+(OAuth flow lands in v0.2 — until then the hosted endpoint accepts `x-getmnemo-api-key` + `x-getmnemo-workspace-id` headers from trusted clients.)
 
 ## Develop
 
 ```bash
 npm install
-cp .env.example .env   # fill in LEDGERMEM_API_KEY + LEDGERMEM_WORKSPACE_ID
+cp .env.example .env   # fill in GETMNEMO_API_KEY + GETMNEMO_WORKSPACE_ID
 npm run dev            # stdio
 npm run dev:http       # HTTP/SSE on :8787
 npm run build          # bundle to dist/
@@ -65,7 +65,7 @@ npm run build          # bundle to dist/
 - **HTTP/SSE** (`src/http.ts`): single long-running process for hosted use, header-or-OAuth auth.
 - Both transports share `src/server.ts` (tool registration + dispatch) and `src/api-client.ts` (typed REST wrapper).
 
-The server deliberately does NOT depend on `@ledgermem/memory` (the JS SDK) so it can ship independently.
+The server deliberately does NOT depend on `getmnemo` (the JS SDK) so it can ship independently.
 
 ## License
 
