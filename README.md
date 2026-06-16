@@ -12,7 +12,9 @@ Model Context Protocol server for [Mnemo Memory](https://mnemohq.com) — expose
 | `memory_delete` | Permanently remove a memory by ID. |
 | `memory_list` | Paginate through memories (cursor-based). |
 
-All calls are scoped to a workspace and (optionally) an actor.
+All calls are scoped to a workspace and a tenant container, both supplied by
+the operator at server startup (env). The container is the tenant boundary —
+it is **not** an argument the model can set; the tools only take content/query.
 
 ## Install
 
@@ -32,7 +34,8 @@ Or wire it into the client config directly. Example for Claude Desktop (`~/Libra
       "args": ["-y", "getmnemo-mcp"],
       "env": {
         "GETMNEMO_API_KEY": "prfly_live_...",
-        "GETMNEMO_WORKSPACE_ID": "ws_..."
+        "GETMNEMO_WORKSPACE_ID": "ws_...",
+        "GETMNEMO_CONTAINER_TAG": "user:jane"
       }
     }
   }
@@ -45,7 +48,7 @@ Get an API key at <https://app.mnemohq.com/settings/api-keys>.
 
 ```bash
 npm install
-cp .env.example .env   # fill in GETMNEMO_API_KEY + GETMNEMO_WORKSPACE_ID
+cp .env.example .env   # fill in GETMNEMO_API_KEY + GETMNEMO_WORKSPACE_ID + GETMNEMO_CONTAINER_TAG
 npm run dev            # stdio
 npm run dev:http       # HTTP/SSE on :8787
 npm run build          # bundle to dist/

@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 /**
- * HTTP/SSE entry-point for hosted MCP at mcp.mnemohq.com.
+ * HTTP/SSE entry-point for hosted MCP.
  *
  * Each connecting client supplies its own GETMNEMO_API_KEY and
  * GETMNEMO_WORKSPACE_ID via OAuth (Phase 2) or via custom headers
  * `x-getmnemo-api-key` + `x-getmnemo-workspace-id` (Phase 1, dev-only).
+ *
+ * The tenant boundary (container) comes from the operator's config:
+ * headers `x-getmnemo-container-tag` (or `x-getmnemo-scope-type` +
+ * `x-getmnemo-scope-id`), falling back to env. It is NOT a model argument.
  *
  * Listens on PORT (default 8787). Healthcheck at GET /healthz.
  */
@@ -12,6 +16,7 @@
 import { createServer as createHttpServer } from 'node:http'
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js'
 import { createServer } from './server.js'
+import { resolveContainerFromHeaders } from './config.js'
 
 const PORT = Number(process.env.PORT ?? 8787)
 const DEFAULT_API_URL = process.env.GETMNEMO_API_URL ?? 'https://api.mnemohq.com'
@@ -54,11 +59,31 @@ const httpServer = createHttpServer((req, res) => {
     return
   }
 
+  // SECURITY: tenant boundary from operator-supplied headers/env, never the model.
+  const container = resolveContainerFromHeaders(
+    req.headers['x-getmnemo-container-tag'] as string | undefined,
+    req.headers['x-getmnemo-scope-type'] as string | undefined,
+    req.headers['x-getmnemo-scope-id'] as string | undefined,
+    process.env,
+  )
+  if (!container) {
+    res.writeHead(400, { 'content-type': 'application/json' })
+    res.end(
+      JSON.stringify({
+        error:
+          'Missing tenant boundary. Supply x-getmnemo-container-tag (or ' +
+          'x-getmnemo-scope-type + x-getmnemo-scope-id), or set the ' +
+          'GETMNEMO_CONTAINER_TAG / GETMNEMO_SCOPE_* env vars.',
+      }),
+    )
+    return
+  }
+
   const server = createServer({
     baseUrl: DEFAULT_API_URL,
     apiKey,
     workspaceId,
-    actorId: req.headers['x-getmnemo-actor-id'] as string | undefined,
+    container,
   })
 
   const transport = new SSEServerTransport('/mcp', res)

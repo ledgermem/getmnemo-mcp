@@ -19,15 +19,12 @@ import { z } from 'zod'
 
 import { MnemoApiClient, type ApiClientConfig, MnemoApiError } from './api-client.js'
 
+// SECURITY: tool inputs expose ONLY content/query knobs. The tenant boundary
+// (containerTag/scope) is NOT here — it comes from server config (env) and is
+// applied by MnemoApiClient. The model cannot read, set, or cross containers.
 const SearchInput = z.object({
   query: z.string().min(1).max(2000).describe('Natural-language search query.'),
   limit: z.number().int().min(1).max(50).default(8).describe('Max number of memories to return.'),
-  actor_id: z
-    .string()
-    .min(1)
-    .max(256)
-    .optional()
-    .describe('Optional actor scope (defaults to the configured actor).'),
 })
 
 // Cap metadata size so a malicious or buggy client cannot push a 10MB blob
@@ -52,7 +49,6 @@ const AddInput = z.object({
   metadata: boundedMetadata
     .optional()
     .describe('Arbitrary JSON metadata (tags, source, etc.). Max 16KB serialized.'),
-  actor_id: z.string().min(1).max(256).optional(),
 })
 
 const UpdateInput = z.object({
@@ -68,20 +64,18 @@ const DeleteInput = z.object({
 const ListInput = z.object({
   limit: z.number().int().min(1).max(100).default(20),
   cursor: z.string().min(1).max(1024).optional(),
-  actor_id: z.string().min(1).max(256).optional(),
 })
 
 const TOOLS: Tool[] = [
   {
     name: 'memory_search',
     description:
-      'Search the Mnemo memory store for facts relevant to a query. Returns ranked hits with content, score, and source citations. Use this BEFORE answering any question that might require remembered context.',
+      'Search the Mnemo memory store for facts relevant to a query. Returns ranked results (the `results` array) with content, score, and source citations. Use this BEFORE answering any question that might require remembered context.',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Natural-language search query.' },
         limit: { type: 'integer', minimum: 1, maximum: 50, default: 8 },
-        actor_id: { type: 'string' },
       },
       required: ['query'],
     },
@@ -95,7 +89,6 @@ const TOOLS: Tool[] = [
       properties: {
         content: { type: 'string' },
         metadata: { type: 'object' },
-        actor_id: { type: 'string' },
       },
       required: ['content'],
     },
@@ -133,7 +126,6 @@ const TOOLS: Tool[] = [
       properties: {
         limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
         cursor: { type: 'string' },
-        actor_id: { type: 'string' },
       },
     },
   },
@@ -142,7 +134,7 @@ const TOOLS: Tool[] = [
 export function createServer(cfg: ApiClientConfig): Server {
   const api = new MnemoApiClient(cfg)
   const server = new Server(
-    { name: 'getmnemo', version: '0.1.0' },
+    { name: 'getmnemo', version: '0.2.0' },
     { capabilities: { tools: {} } },
   )
 
@@ -183,11 +175,11 @@ async function dispatch(
   switch (name) {
     case 'memory_search': {
       const i = SearchInput.parse(raw)
-      return api.search({ query: i.query, limit: i.limit, actorId: i.actor_id })
+      return api.search({ query: i.query, limit: i.limit })
     }
     case 'memory_add': {
       const i = AddInput.parse(raw)
-      return api.addMemory({ content: i.content, metadata: i.metadata, actorId: i.actor_id })
+      return api.addMemory({ content: i.content, metadata: i.metadata })
     }
     case 'memory_update': {
       const i = UpdateInput.parse(raw)
@@ -199,7 +191,7 @@ async function dispatch(
     }
     case 'memory_list': {
       const i = ListInput.parse(raw)
-      return api.listMemories({ limit: i.limit, cursor: i.cursor, actorId: i.actor_id })
+      return api.listMemories({ limit: i.limit, cursor: i.cursor })
     }
     default:
       throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`)
