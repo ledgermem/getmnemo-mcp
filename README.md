@@ -31,7 +31,7 @@ Or wire it into the client config directly. Example for Claude Desktop (`~/Libra
       "command": "npx",
       "args": ["-y", "getmnemo-mcp"],
       "env": {
-        "GETMNEMO_API_KEY": "lk_live_...",
+        "GETMNEMO_API_KEY": "prfly_live_...",
         "GETMNEMO_WORKSPACE_ID": "ws_..."
       }
     }
@@ -40,14 +40,6 @@ Or wire it into the client config directly. Example for Claude Desktop (`~/Libra
 ```
 
 Get an API key at <https://app.mnemohq.com/settings/api-keys>.
-
-### Hosted (HTTP/SSE) at `mcp.mnemohq.com`
-
-```bash
-npx -y install-mcp@latest https://mcp.mnemohq.com/mcp --client claude
-```
-
-(OAuth flow lands in v0.2 — until then the hosted endpoint accepts `x-getmnemo-api-key` + `x-getmnemo-workspace-id` headers from trusted clients.)
 
 ## Develop
 
