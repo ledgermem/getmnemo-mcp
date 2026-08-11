@@ -1,8 +1,8 @@
 /**
  * MCP server factory.
  *
- * Exposes 5 tools to MCP clients (Claude Desktop, Cursor, Windsurf, VS Code,
- * Zed): memory_search, memory_add, memory_update, memory_delete, memory_list.
+ * Exposes memory tools to MCP clients (Claude Desktop, Cursor, Windsurf, VS
+ * Code, Zed): search, add, get, update, delete, and list.
  *
  * Transport-agnostic — wire to stdio (cli.ts) or HTTP/SSE (http.ts).
  */
@@ -46,15 +46,24 @@ const boundedMetadata = z
 
 const AddInput = z.object({
   content: z.string().min(1).max(10_000).describe('The fact or memory to store.'),
+  memoryType: z.string().min(1).max(100).optional(),
   metadata: boundedMetadata
     .optional()
     .describe('Arbitrary JSON metadata (tags, source, etc.). Max 16KB serialized.'),
+  source: boundedMetadata.optional().describe('Provenance for this memory.'),
+  idempotencyKey: z.string().min(1).max(200).optional(),
 })
 
 const UpdateInput = z.object({
   id: z.string().min(1).max(256).describe('Memory ID returned by memory_add or memory_search.'),
   content: z.string().min(1).max(10_000).optional(),
+  memoryType: z.string().min(1).max(100).optional(),
   metadata: boundedMetadata.optional(),
+  source: boundedMetadata.nullable().optional(),
+})
+
+const GetInput = z.object({
+  id: z.string().min(1).max(256).describe('Memory ID returned by memory_add or memory_search.'),
 })
 
 const DeleteInput = z.object({
@@ -89,6 +98,9 @@ const TOOLS: Tool[] = [
       properties: {
         content: { type: 'string' },
         metadata: { type: 'object' },
+        memoryType: { type: 'string' },
+        source: { type: 'object' },
+        idempotencyKey: { type: 'string' },
       },
       required: ['content'],
     },
@@ -103,7 +115,18 @@ const TOOLS: Tool[] = [
         id: { type: 'string' },
         content: { type: 'string' },
         metadata: { type: 'object' },
+        memoryType: { type: 'string' },
+        source: { type: 'object', nullable: true },
       },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'memory_get',
+    description: 'Fetch one memory by ID within the configured tenant container.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
       required: ['id'],
     },
   },
@@ -179,11 +202,26 @@ async function dispatch(
     }
     case 'memory_add': {
       const i = AddInput.parse(raw)
-      return api.addMemory({ content: i.content, metadata: i.metadata })
+      return api.addMemory({
+        content: i.content,
+        memoryType: i.memoryType,
+        metadata: i.metadata,
+        source: i.source,
+        idempotencyKey: i.idempotencyKey,
+      })
     }
     case 'memory_update': {
       const i = UpdateInput.parse(raw)
-      return api.updateMemory(i.id, { content: i.content, metadata: i.metadata })
+      return api.updateMemory(i.id, {
+        content: i.content,
+        memoryType: i.memoryType,
+        metadata: i.metadata,
+        source: i.source,
+      })
+    }
+    case 'memory_get': {
+      const i = GetInput.parse(raw)
+      return api.getMemory(i.id)
     }
     case 'memory_delete': {
       const i = DeleteInput.parse(raw)
