@@ -80,6 +80,8 @@ export type AddResponse = {
   items: Memory[]
 }
 
+export type MemorySource = Record<string, unknown>
+
 /**
  * The tenant boundary. Exactly one form is configured server-side:
  *  - `containerTag`: the "user:jane" string form (preferred, simpler), OR
@@ -164,7 +166,10 @@ export class MnemoApiClient {
 
   async addMemory(input: {
     content: string
+    memoryType?: string
     metadata?: Record<string, unknown>
+    source?: MemorySource
+    idempotencyKey?: string
   }): Promise<AddResponse> {
     // CreateMemoriesDto: content wrapped in `items[]`; containerTag|scope
     // required at runtime (DTO marks only `items`, but prod 400s without it).
@@ -172,7 +177,10 @@ export class MnemoApiClient {
       items: [
         {
           content: input.content,
+          ...(input.memoryType !== undefined ? { memoryType: input.memoryType } : {}),
           ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+          ...(input.source !== undefined ? { source: input.source } : {}),
+          ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
         },
       ],
       ...this.containerBody(),
@@ -181,22 +189,47 @@ export class MnemoApiClient {
 
   async updateMemory(
     memoryId: string,
-    input: { content?: string; metadata?: Record<string, unknown> },
+    input: {
+      content?: string
+      memoryType?: string
+      metadata?: Record<string, unknown> | null
+      source?: MemorySource | null
+    },
   ): Promise<Memory> {
     // UpdateMemoryDto: {content?, memoryType?, metadata?, source?} — all
-    // optional. Path is /v1/memories/{memoryId}; header carries the workspace.
+    // optional. Direct access is additionally pinned by the configured scope
+    // query so same-workspace containers cannot cross read/write boundaries.
     return this.request<Memory>(
       'PATCH',
-      `/v1/memories/${encodeURIComponent(memoryId)}`,
+      `/v1/memories/${encodeURIComponent(memoryId)}${this.containerQuery()}`,
       input,
+    )
+  }
+
+  async getMemory(memoryId: string): Promise<Memory> {
+    return this.request<Memory>(
+      'GET',
+      `/v1/memories/${encodeURIComponent(memoryId)}${this.containerQuery()}`,
     )
   }
 
   async deleteMemory(memoryId: string): Promise<{ id: string; deleted: true }> {
     return this.request<{ id: string; deleted: true }>(
       'DELETE',
-      `/v1/memories/${encodeURIComponent(memoryId)}`,
+      `/v1/memories/${encodeURIComponent(memoryId)}${this.containerQuery()}`,
     )
+  }
+
+  private containerQuery(): string {
+    const params = new URLSearchParams()
+    if (this.container.containerTag !== undefined) {
+      params.set('containerTag', this.container.containerTag)
+    } else if (this.container.scope) {
+      params.set('scopeType', this.container.scope.type)
+      params.set('scopeId', this.container.scope.id)
+    }
+    const query = params.toString()
+    return query ? `?${query}` : ''
   }
 
   async listMemories(input?: {

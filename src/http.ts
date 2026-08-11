@@ -1,139 +1,140 @@
-#!/usr/bin/env node
 /**
- * HTTP/SSE entry-point for hosted MCP.
+ * Streamable HTTP entry point for hosted MCP clients.
  *
- * Each connecting client supplies its own GETMNEMO_API_KEY and
- * GETMNEMO_WORKSPACE_ID via OAuth (Phase 2) or via custom headers
- * `x-getmnemo-api-key` + `x-getmnemo-workspace-id` (Phase 1, dev-only).
- *
- * The tenant boundary (container) comes from the operator's config:
- * headers `x-getmnemo-container-tag` (or `x-getmnemo-scope-type` +
- * `x-getmnemo-scope-id`), falling back to env. It is NOT a model argument.
- *
- * Listens on PORT (default 8787). Healthcheck at GET /healthz.
+ * Supports public OAuth access tokens and private API-key sessions. Public
+ * OAuth sessions derive workspace/container scope from Mnemo's grant; the
+ * MCP client cannot provide or change that scope.
  */
 
-import { createServer as createHttpServer } from 'node:http'
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js'
+import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { createServer } from './server.js'
-import { resolveContainerFromHeaders } from './config.js'
+import { resolveContainerFromEnv, resolveContainerFromHeaders } from './config.js'
+import type { ContainerScope } from './api-client.js'
 
-const PORT = Number(process.env.PORT ?? 8787)
+type EnvLike = Record<string, string | undefined>
 const DEFAULT_API_URL = process.env.GETMNEMO_API_URL ?? 'https://api.mnemohq.com'
 
-const httpServer = createHttpServer((req, res) => {
-  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+function bearerToken(req: IncomingMessage): string | undefined {
+  const authorization = req.headers.authorization
+  if (authorization?.startsWith('Bearer ')) return authorization.slice(7).trim() || undefined
+  const legacy = req.headers['x-getmnemo-api-key']
+  return typeof legacy === 'string' ? legacy.trim() || undefined : undefined
+}
 
-  if (url.pathname === '/healthz') {
-    res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ status: 'ok', service: 'getmnemo-mcp' }))
-    return
-  }
+function headerValue(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name]
+  return typeof value === 'string' ? value.trim() || undefined : undefined
+}
 
-  if (url.pathname !== '/mcp') {
-    res.writeHead(404, { 'content-type': 'text/plain' })
-    res.end('Not found. GET /mcp for the SSE stream, GET /healthz for liveness.\n')
-    return
-  }
+function reject(res: ServerResponse, status: number, message: string): void {
+  res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+  res.end(JSON.stringify({ error: message }))
+}
 
-  if (req.method !== 'GET' && req.method !== 'POST') {
-    res.writeHead(405, { 'content-type': 'text/plain', allow: 'GET, POST' })
-    res.end('Method not allowed.\n')
-    return
-  }
-
-  const apiKey =
-    (req.headers['x-getmnemo-api-key'] as string | undefined) ?? process.env.GETMNEMO_API_KEY
-  const workspaceId =
-    (req.headers['x-getmnemo-workspace-id'] as string | undefined) ??
-    process.env.GETMNEMO_WORKSPACE_ID
-
-  if (!apiKey || !workspaceId) {
-    res.writeHead(401, { 'content-type': 'application/json' })
-    res.end(
-      JSON.stringify({
-        error: 'Missing x-getmnemo-api-key and/or x-getmnemo-workspace-id headers.',
-        hint: 'OAuth flow lands in v0.2; headers work today for trusted clients.',
-      }),
-    )
-    return
-  }
-
-  // SECURITY: tenant boundary from operator-supplied headers/env, never the model.
-  const container = resolveContainerFromHeaders(
-    req.headers['x-getmnemo-container-tag'] as string | undefined,
-    req.headers['x-getmnemo-scope-type'] as string | undefined,
-    req.headers['x-getmnemo-scope-id'] as string | undefined,
-    process.env,
+function resolveRequestContainer(req: IncomingMessage, env: EnvLike): ContainerScope | null {
+  if (env.GETMNEMO_ALLOW_HEADER_SCOPE !== '1') return resolveContainerFromEnv(env)
+  return resolveContainerFromHeaders(
+    headerValue(req, 'x-getmnemo-container-tag'),
+    headerValue(req, 'x-getmnemo-scope-type'),
+    headerValue(req, 'x-getmnemo-scope-id'),
+    env,
   )
-  if (!container) {
-    res.writeHead(400, { 'content-type': 'application/json' })
-    res.end(
-      JSON.stringify({
-        error:
-          'Missing tenant boundary. Supply x-getmnemo-container-tag (or ' +
-          'x-getmnemo-scope-type + x-getmnemo-scope-id), or set the ' +
-          'GETMNEMO_CONTAINER_TAG / GETMNEMO_SCOPE_* env vars.',
-      }),
-    )
-    return
-  }
+}
 
-  const server = createServer({
-    baseUrl: DEFAULT_API_URL,
-    apiKey,
-    workspaceId,
-    container,
+export function createMcpHttpServer(env: EnvLike = process.env) {
+  const apiUrl = env.GETMNEMO_API_URL ?? DEFAULT_API_URL
+
+  const httpServer = createHttpServer(async (req, res) => {
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+
+    if (url.pathname === '/healthz') {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+      res.end(JSON.stringify({ status: 'ok', service: 'getmnemo-mcp', transport: 'streamable-http' }))
+      return
+    }
+    if (url.pathname === '/.well-known/oauth-protected-resource') {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'public, max-age=300' })
+      res.end(JSON.stringify({
+        resource: 'https://mcp.mnemohq.com/mcp',
+        authorization_servers: ['https://api.mnemohq.com/v1/mcp/oauth'],
+        scopes_supported: ['memories:read', 'memories:write', 'memories:delete', 'search:read'],
+        bearer_methods_supported: ['header'],
+      }))
+      return
+    }
+    if (url.pathname !== '/mcp') {
+      reject(res, 404, 'Not found. Use POST or GET /mcp.')
+      return
+    }
+    if (!['GET', 'POST'].includes(req.method ?? '')) {
+      res.writeHead(405, { allow: 'GET, POST' })
+      res.end()
+      return
+    }
+
+    const credential = bearerToken(req)
+    if (!credential) {
+      res.setHeader('WWW-Authenticate', 'Bearer realm="mcp", resource_metadata="https://mcp.mnemohq.com/.well-known/oauth-protected-resource"')
+      reject(res, 401, 'OAuth authorization is required. Connect this MCP server from a client that supports remote OAuth.')
+      return
+    }
+
+    let workspaceId: string | undefined
+    let container: ContainerScope | null = null
+    if (credential.split('.').length === 3) {
+      const introspection = await fetch(`${apiUrl}/v1/mcp/oauth/introspect`, {
+        headers: { authorization: `Bearer ${credential}` },
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (!introspection.ok) {
+        res.setHeader('WWW-Authenticate', 'Bearer realm="mcp", error="invalid_token", resource_metadata="https://mcp.mnemohq.com/.well-known/oauth-protected-resource"')
+        reject(res, 401, 'The MCP authorization token is invalid or expired.')
+        return
+      }
+      const identity: unknown = await introspection.json()
+      if (!identity || typeof identity !== 'object') {
+        reject(res, 401, 'Invalid MCP authorization response.')
+        return
+      }
+      const record = identity as Record<string, unknown>
+      workspaceId = typeof record.tenantId === 'string' ? record.tenantId : undefined
+      const tag = typeof record.containerTag === 'string' ? record.containerTag : undefined
+      if (workspaceId && tag) container = { containerTag: tag }
+    } else {
+      workspaceId = headerValue(req, 'x-getmnemo-workspace-id') ?? env.GETMNEMO_WORKSPACE_ID
+      container = resolveRequestContainer(req, env)
+    }
+    if (!workspaceId || !container) {
+      reject(res, 400, 'The MCP authorization grant has no valid workspace/container scope.')
+      return
+    }
+
+    // Stateless mode is intentional for the public service: no in-memory
+    // session map means Azure replicas can serve subsequent MCP requests
+    // without sticky routing or shared session storage.
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+    const server = createServer({
+      baseUrl: apiUrl,
+      apiKey: credential,
+      workspaceId,
+      container,
+    })
+    await server.connect(transport)
+    await transport.handleRequest(req, res)
+    await server.close()
   })
 
-  const transport = new SSEServerTransport('/mcp', res)
+  return httpServer
+}
 
-  // SSE keepalive: many proxies (CloudFront, ALB, nginx default 60s) close
-  // idle connections, which silently breaks long-lived MCP sessions. Emit a
-  // comment-frame heartbeat every 25s so the connection stays warm.
-  const KEEPALIVE_MS = 25_000
-  // Track tear-down so the heartbeat cannot race with cleanup. Without this
-  // guard, `setInterval` can fire on the same tick that the client closes the
-  // socket: clearInterval is queued, the timer callback is already running,
-  // and `res.write` lands on a half-closed transport — Node throws
-  // ERR_STREAM_WRITE_AFTER_END (uncaught here, the empty catch only swallows
-  // synchronous errors; the actual error fires on the 'error' event).
-  let closed = false
-  const keepalive = setInterval(() => {
-    if (closed || res.writableEnded || res.destroyed) return
-    try {
-      // SSE comments start with ":" and are ignored by the client parser.
-      res.write(`: keepalive ${Date.now()}\n\n`)
-    } catch {
-      // res may already be closed; cleanup will run via the 'close' handler.
-    }
-  }, KEEPALIVE_MS)
-  // Don't keep the event loop alive solely for the heartbeat.
-  keepalive.unref?.()
-
-  const cleanup = (): void => {
-    if (closed) return
-    closed = true
-    clearInterval(keepalive)
-    transport.close().catch(() => undefined)
-    server.close().catch(() => undefined)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const port = Number(process.env.PORT ?? 8787)
+  const server = createMcpHttpServer()
+  server.listen(port, () => process.stdout.write(`Mnemo MCP HTTP listening on :${port}\n`))
+  const shutdown = (): void => {
+    server.close(() => process.exit(0))
   }
-  res.on('close', cleanup)
-  res.on('error', cleanup)
-
-  server.connect(transport).catch((err) => {
-    process.stderr.write(`MCP transport error: ${err instanceof Error ? err.message : err}\n`)
-    cleanup()
-    if (!res.headersSent) {
-      res.writeHead(500, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: 'MCP transport failed to initialize' }))
-    }
-  })
-})
-
-httpServer.listen(PORT, () => {
-  process.stdout.write(`Mnemo MCP HTTP listening on :${PORT}\n`)
-})
-
-process.on('SIGTERM', () => httpServer.close(() => process.exit(0)))
-process.on('SIGINT', () => httpServer.close(() => process.exit(0)))
+  process.on('SIGTERM', shutdown)
+  process.on('SIGINT', shutdown)
+}
