@@ -9,10 +9,16 @@
  * https://api.mnemohq.com/openapi.json). See SDK_RECONCILIATION_0.2.0.md.
  *
  * SECURITY: the tenant boundary (`containerTag` or structured `scope`) is
- * supplied once at construction from SERVER CONFIG/ENV — it is NOT a
- * per-call argument the model can set. Every request is pinned to the
- * configured container; callers only provide content/query.
+ * supplied once at construction from SERVER CONFIG/ENV as the DEFAULT
+ * container. For the hosted multi-container model a caller MAY additionally
+ * request a specific container per call; that request is sent as the
+ * `X-Mnemo-Container` header and is VALIDATED SERVER-SIDE against the
+ * connection's allowed set (403 out-of-scope, 400 write-needs-container).
+ * The model can only target containers the connection already permits.
  */
+
+/** Header the API reads to target a specific allowed container per call. */
+export const CONTAINER_HEADER = 'x-mnemo-container'
 
 // confirmed against prod 2026-06-16. Shapes verified from real /v1 payloads.
 export type Memory = {
@@ -80,6 +86,8 @@ export type AddResponse = {
   items: Memory[]
 }
 
+export type MemorySource = Record<string, unknown>
+
 /**
  * The tenant boundary. Exactly one form is configured server-side:
  *  - `containerTag`: the "user:jane" string form (preferred, simpler), OR
@@ -95,10 +103,14 @@ export type ApiClientConfig = {
   apiKey: string
   workspaceId: string
   /**
-   * SERVER-CONFIG tenant boundary. Required. Supplied at server startup
-   * (env), never by the model. All add/search/list calls are pinned to it.
+   * DEFAULT tenant boundary, supplied at server startup (env) or from an
+   * OAuth grant. Local (stdio/header) mode REQUIRES it — every call is pinned
+   * to it unless a validated per-call container overrides. Hosted OAuth mode
+   * MAY leave it UNSET for "all containers" or multi-container grants: the API
+   * then resolves scope from the grant, and a per-call `X-Mnemo-Container`
+   * header targets a specific container. Never a model-set boundary.
    */
-  container: ContainerScope
+  container?: ContainerScope
   fetch?: typeof fetch
   /** Per-request timeout in ms (default 30s). */
   timeoutMs?: number
@@ -120,14 +132,20 @@ export class MnemoApiClient {
   private readonly headers: Record<string, string>
   private readonly fetchImpl: typeof fetch
   private readonly timeoutMs: number
-  /** Server-configured tenant boundary, threaded into every request. */
-  private readonly container: ContainerScope
+  /**
+   * Default tenant boundary, threaded into every request that lacks a
+   * per-call override. Undefined only in hosted OAuth mode (all/multi grants),
+   * where the API resolves scope from the grant + per-call header.
+   */
+  private readonly container?: ContainerScope
 
   constructor(cfg: ApiClientConfig) {
     if (!cfg.apiKey) throw new Error('apiKey is required')
     if (!cfg.workspaceId) throw new Error('workspaceId is required')
-    if (!cfg.container || (!cfg.container.containerTag && !cfg.container.scope)) {
-      throw new Error('container (containerTag or scope) is required — it is the tenant boundary')
+    // A default container is optional (hosted OAuth all/multi grants omit it),
+    // but if one IS supplied it must be a valid form.
+    if (cfg.container && !cfg.container.containerTag && !cfg.container.scope) {
+      throw new Error('container, when set, must have a containerTag or scope')
     }
     this.baseUrl = cfg.baseUrl.replace(/\/$/, '')
     this.headers = {
@@ -144,91 +162,155 @@ export class MnemoApiClient {
   }
 
   /**
-   * Spreads the configured tenant boundary into a request body.
-   * Exactly one of `containerTag` / `scope` is present.
+   * Spreads the effective tenant boundary into a request body. A per-call
+   * `override` container tag (validated server-side) wins over the configured
+   * default; otherwise exactly one of `containerTag` / `scope` is present.
    */
-  private containerBody(): Record<string, unknown> {
-    return this.container.containerTag !== undefined
-      ? { containerTag: this.container.containerTag }
-      : { scope: this.container.scope }
+  private containerBody(override?: string): Record<string, unknown> {
+    if (override !== undefined) return { containerTag: override }
+    if (this.container?.containerTag !== undefined) return { containerTag: this.container.containerTag }
+    if (this.container?.scope) return { scope: this.container.scope }
+    // Unset (hosted all/multi grant): the API resolves scope from the grant.
+    return {}
   }
 
-  async search(input: { query: string; limit?: number }): Promise<SearchResponse> {
+  async search(input: { query: string; limit?: number; container?: string }): Promise<SearchResponse> {
     // SearchRequestDto: field is `q` (NOT `query`); containerTag|scope required.
-    return this.request<SearchResponse>('POST', '/v1/search', {
-      q: input.query,
-      ...this.containerBody(),
-      ...(input.limit !== undefined ? { limit: input.limit } : {}),
-    })
+    return this.request<SearchResponse>(
+      'POST',
+      '/v1/search',
+      {
+        q: input.query,
+        ...this.containerBody(input.container),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      },
+      input.container,
+    )
   }
 
   async addMemory(input: {
     content: string
+    memoryType?: string
     metadata?: Record<string, unknown>
+    source?: MemorySource
+    idempotencyKey?: string
+    container?: string
   }): Promise<AddResponse> {
     // CreateMemoriesDto: content wrapped in `items[]`; containerTag|scope
     // required at runtime (DTO marks only `items`, but prod 400s without it).
-    return this.request<AddResponse>('POST', '/v1/memories', {
-      items: [
-        {
-          content: input.content,
-          ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-        },
-      ],
-      ...this.containerBody(),
-    })
+    return this.request<AddResponse>(
+      'POST',
+      '/v1/memories',
+      {
+        items: [
+          {
+            content: input.content,
+            ...(input.memoryType !== undefined ? { memoryType: input.memoryType } : {}),
+            ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+            ...(input.source !== undefined ? { source: input.source } : {}),
+            ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
+          },
+        ],
+        ...this.containerBody(input.container),
+      },
+      input.container,
+    )
   }
 
   async updateMemory(
     memoryId: string,
-    input: { content?: string; metadata?: Record<string, unknown> },
+    input: {
+      content?: string
+      memoryType?: string
+      metadata?: Record<string, unknown> | null
+      source?: MemorySource | null
+    },
+    container?: string,
   ): Promise<Memory> {
     // UpdateMemoryDto: {content?, memoryType?, metadata?, source?} — all
-    // optional. Path is /v1/memories/{memoryId}; header carries the workspace.
+    // optional. Direct access is additionally pinned by the effective scope
+    // query so same-workspace containers cannot cross read/write boundaries.
     return this.request<Memory>(
       'PATCH',
-      `/v1/memories/${encodeURIComponent(memoryId)}`,
+      `/v1/memories/${encodeURIComponent(memoryId)}${this.containerQuery(container)}`,
       input,
+      container,
     )
   }
 
-  async deleteMemory(memoryId: string): Promise<{ id: string; deleted: true }> {
+  async getMemory(memoryId: string, container?: string): Promise<Memory> {
+    return this.request<Memory>(
+      'GET',
+      `/v1/memories/${encodeURIComponent(memoryId)}${this.containerQuery(container)}`,
+      undefined,
+      container,
+    )
+  }
+
+  async deleteMemory(memoryId: string, container?: string): Promise<{ id: string; deleted: true }> {
     return this.request<{ id: string; deleted: true }>(
       'DELETE',
-      `/v1/memories/${encodeURIComponent(memoryId)}`,
+      `/v1/memories/${encodeURIComponent(memoryId)}${this.containerQuery(container)}`,
+      undefined,
+      container,
     )
+  }
+
+  private containerQuery(override?: string): string {
+    const params = new URLSearchParams()
+    if (override !== undefined) {
+      params.set('containerTag', override)
+    } else if (this.container?.containerTag !== undefined) {
+      params.set('containerTag', this.container.containerTag)
+    } else if (this.container?.scope) {
+      params.set('scopeType', this.container.scope.type)
+      params.set('scopeId', this.container.scope.id)
+    }
+    const query = params.toString()
+    return query ? `?${query}` : ''
   }
 
   async listMemories(input?: {
     limit?: number
     cursor?: string
+    container?: string
   }): Promise<{ items: Memory[]; nextCursor: string | null }> {
     // GET /v1/memories filters by containerTag (or scopeType+scopeId), NOT
-    // actorId. Thread the server-configured container as the filter.
+    // actorId. Thread the effective container (per-call override or default).
     const params = new URLSearchParams()
     if (input?.limit !== undefined) params.set('limit', String(input.limit))
     if (input?.cursor !== undefined) params.set('cursor', input.cursor)
-    if (this.container.containerTag !== undefined) {
+    if (input?.container !== undefined) {
+      params.set('containerTag', input.container)
+    } else if (this.container?.containerTag !== undefined) {
       params.set('containerTag', this.container.containerTag)
-    } else if (this.container.scope) {
+    } else if (this.container?.scope) {
       params.set('scopeType', this.container.scope.type)
       params.set('scopeId', this.container.scope.id)
     }
     const qs = params.toString()
-    return this.request('GET', `/v1/memories${qs ? `?${qs}` : ''}`)
+    return this.request('GET', `/v1/memories${qs ? `?${qs}` : ''}`, undefined, input?.container)
   }
 
   private async request<T>(
     method: string,
     path: string,
     body?: unknown,
+    containerHeader?: string,
   ): Promise<T> {
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs)
     try {
+      // Per-call container targeting: when present, the API validates this
+      // header against the connection's allowed set. When absent, no header
+      // is sent and the API falls back to the connection's allowed set.
+      const headers =
+        containerHeader !== undefined
+          ? { ...this.headers, [CONTAINER_HEADER]: containerHeader }
+          : { ...this.headers }
       const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
-        headers: { ...this.headers },
+        headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: ctrl.signal,
       })

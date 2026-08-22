@@ -12,4 +12,5 @@ export {
   type SearchHit,
   type SearchResponse,
   type AddResponse,
+  type MemorySource,
 } from './api-client.js'
