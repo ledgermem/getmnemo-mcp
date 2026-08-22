@@ -107,7 +107,7 @@ export function createMcpHttpServer(env: EnvLike = process.env) {
 
     const credential = bearerToken(req)
     if (!credential) {
-      res.setHeader('WWW-Authenticate', 'Bearer realm="mcp", scope="memories:read search:read", resource_metadata="https://mcp.mnemohq.com/.well-known/oauth-protected-resource"')
+      res.setHeader('WWW-Authenticate', 'Bearer realm="mcp", scope="memories:read memories:write memories:delete search:read", resource_metadata="https://mcp.mnemohq.com/.well-known/oauth-protected-resource"')
       reject(res, 401, 'OAuth authorization is required. Connect this MCP server from a client that supports remote OAuth.')
       return
     }
