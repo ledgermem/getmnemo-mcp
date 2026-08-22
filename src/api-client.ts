@@ -103,10 +103,14 @@ export type ApiClientConfig = {
   apiKey: string
   workspaceId: string
   /**
-   * SERVER-CONFIG tenant boundary. Required. Supplied at server startup
-   * (env), never by the model. All add/search/list calls are pinned to it.
+   * DEFAULT tenant boundary, supplied at server startup (env) or from an
+   * OAuth grant. Local (stdio/header) mode REQUIRES it — every call is pinned
+   * to it unless a validated per-call container overrides. Hosted OAuth mode
+   * MAY leave it UNSET for "all containers" or multi-container grants: the API
+   * then resolves scope from the grant, and a per-call `X-Mnemo-Container`
+   * header targets a specific container. Never a model-set boundary.
    */
-  container: ContainerScope
+  container?: ContainerScope
   fetch?: typeof fetch
   /** Per-request timeout in ms (default 30s). */
   timeoutMs?: number
@@ -128,14 +132,20 @@ export class MnemoApiClient {
   private readonly headers: Record<string, string>
   private readonly fetchImpl: typeof fetch
   private readonly timeoutMs: number
-  /** Server-configured tenant boundary, threaded into every request. */
-  private readonly container: ContainerScope
+  /**
+   * Default tenant boundary, threaded into every request that lacks a
+   * per-call override. Undefined only in hosted OAuth mode (all/multi grants),
+   * where the API resolves scope from the grant + per-call header.
+   */
+  private readonly container?: ContainerScope
 
   constructor(cfg: ApiClientConfig) {
     if (!cfg.apiKey) throw new Error('apiKey is required')
     if (!cfg.workspaceId) throw new Error('workspaceId is required')
-    if (!cfg.container || (!cfg.container.containerTag && !cfg.container.scope)) {
-      throw new Error('container (containerTag or scope) is required — it is the tenant boundary')
+    // A default container is optional (hosted OAuth all/multi grants omit it),
+    // but if one IS supplied it must be a valid form.
+    if (cfg.container && !cfg.container.containerTag && !cfg.container.scope) {
+      throw new Error('container, when set, must have a containerTag or scope')
     }
     this.baseUrl = cfg.baseUrl.replace(/\/$/, '')
     this.headers = {
@@ -158,9 +168,10 @@ export class MnemoApiClient {
    */
   private containerBody(override?: string): Record<string, unknown> {
     if (override !== undefined) return { containerTag: override }
-    return this.container.containerTag !== undefined
-      ? { containerTag: this.container.containerTag }
-      : { scope: this.container.scope }
+    if (this.container?.containerTag !== undefined) return { containerTag: this.container.containerTag }
+    if (this.container?.scope) return { scope: this.container.scope }
+    // Unset (hosted all/multi grant): the API resolves scope from the grant.
+    return {}
   }
 
   async search(input: { query: string; limit?: number; container?: string }): Promise<SearchResponse> {
@@ -249,9 +260,9 @@ export class MnemoApiClient {
     const params = new URLSearchParams()
     if (override !== undefined) {
       params.set('containerTag', override)
-    } else if (this.container.containerTag !== undefined) {
+    } else if (this.container?.containerTag !== undefined) {
       params.set('containerTag', this.container.containerTag)
-    } else if (this.container.scope) {
+    } else if (this.container?.scope) {
       params.set('scopeType', this.container.scope.type)
       params.set('scopeId', this.container.scope.id)
     }
@@ -271,9 +282,9 @@ export class MnemoApiClient {
     if (input?.cursor !== undefined) params.set('cursor', input.cursor)
     if (input?.container !== undefined) {
       params.set('containerTag', input.container)
-    } else if (this.container.containerTag !== undefined) {
+    } else if (this.container?.containerTag !== undefined) {
       params.set('containerTag', this.container.containerTag)
-    } else if (this.container.scope) {
+    } else if (this.container?.scope) {
       params.set('scopeType', this.container.scope.type)
       params.set('scopeId', this.container.scope.id)
     }

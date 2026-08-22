@@ -120,6 +120,36 @@ describe('MnemoApiClient', () => {
     expect(String(getUrl)).toContain('containerTag=team%3Aacme')
   })
 
+  it('tolerates an unset default container (hosted all/multi grant)', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => response({ results: [], items: [], nextCursor: null }))
+    // No `container` in config — allowed in hosted OAuth mode.
+    const client = new MnemoApiClient({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'prfly_live_test',
+      workspaceId: 'workspace',
+      fetch: fetchImpl,
+    })
+
+    // Search with no per-call container: no containerTag in body, no header —
+    // the API resolves scope from the grant.
+    await expect(client.search({ query: 'hello' })).resolves.toBeDefined()
+    const [, searchInit] = fetchImpl.mock.calls[0] ?? []
+    expect(JSON.parse(String(searchInit?.body))).not.toHaveProperty('containerTag')
+    expect(headerOf(searchInit, CONTAINER_HEADER)).toBeUndefined()
+
+    // List with no per-call container: no container filter in the query string.
+    await client.listMemories({ limit: 5 })
+    expect(String(fetchImpl.mock.calls[1]?.[0])).not.toContain('containerTag')
+
+    // A per-call container still targets a specific one via header + body.
+    await client.addMemory({ content: 'x', container: 'team:acme' })
+    const [, addInit] = fetchImpl.mock.calls[2] ?? []
+    expect(headerOf(addInit, CONTAINER_HEADER)).toBe('team:acme')
+    expect(JSON.parse(String(addInit?.body))).toMatchObject({ containerTag: 'team:acme' })
+  })
+
   it('surfaces API errors with status for container-scope rejections', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

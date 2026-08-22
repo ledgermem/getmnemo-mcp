@@ -42,6 +42,38 @@ function resolveRequestContainer(req: IncomingMessage, env: EnvLike): ContainerS
   )
 }
 
+/**
+ * Determine the DEFAULT container to pin for an OAuth grant, from the
+ * introspection record.
+ *
+ * - `containerTags` array present: pin ONLY when the grant is scoped to
+ *   exactly one container. For "all containers" (`[]`) or multi-container
+ *   (length > 1) grants, return `undefined` — leave the default unset so the
+ *   API resolves scope from the grant, with per-call `X-Mnemo-Container`
+ *   selecting a specific container.
+ * - No `containerTags` array (older API): fall back to the legacy single
+ *   `containerTag` string when present.
+ *
+ * Returning `undefined` is a valid, expected outcome — NOT an error.
+ */
+export function pinnedContainerFromGrant(
+  record: Record<string, unknown>,
+): ContainerScope | undefined {
+  const rawTags = record.containerTags
+  if (Array.isArray(rawTags)) {
+    const tags = rawTags.filter((t): t is string => typeof t === 'string' && t.length > 0)
+    if (tags.length === 1) {
+      const [only] = tags
+      return only ? { containerTag: only } : undefined
+    }
+    return undefined
+  }
+  const legacy = typeof record.containerTag === 'string' && record.containerTag.length > 0
+    ? record.containerTag
+    : undefined
+  return legacy ? { containerTag: legacy } : undefined
+}
+
 export function createMcpHttpServer(env: EnvLike = process.env) {
   const apiUrl = env.GETMNEMO_API_URL ?? DEFAULT_API_URL
 
@@ -81,7 +113,9 @@ export function createMcpHttpServer(env: EnvLike = process.env) {
     }
 
     let workspaceId: string | undefined
-    let container: ContainerScope | null = null
+    // `undefined` default container is valid for OAuth all/multi-container
+    // grants (the API resolves scope from the grant + per-call header).
+    let container: ContainerScope | undefined
     if (credential.split('.').length === 3) {
       const introspection = await fetch(`${apiUrl}/v1/mcp/oauth/introspect`, {
         headers: { authorization: `Bearer ${credential}` },
@@ -99,15 +133,22 @@ export function createMcpHttpServer(env: EnvLike = process.env) {
       }
       const record = identity as Record<string, unknown>
       workspaceId = typeof record.tenantId === 'string' ? record.tenantId : undefined
-      const tag = typeof record.containerTag === 'string' ? record.containerTag : undefined
-      if (workspaceId && tag) container = { containerTag: tag }
+      container = workspaceId ? pinnedContainerFromGrant(record) : undefined
+      // OAuth requires only a workspace; the container may be unset (all/multi
+      // grant). A write with no per-call container then gets the API's friendly
+      // "specify a target container" error at tool time — NOT a setup failure.
+      if (!workspaceId) {
+        reject(res, 400, 'The MCP authorization grant has no valid workspace scope.')
+        return
+      }
     } else {
       workspaceId = headerValue(req, 'x-getmnemo-workspace-id') ?? env.GETMNEMO_WORKSPACE_ID
-      container = resolveRequestContainer(req, env)
-    }
-    if (!workspaceId || !container) {
-      reject(res, 400, 'The MCP authorization grant has no valid workspace/container scope.')
-      return
+      container = resolveRequestContainer(req, env) ?? undefined
+      // Local (env/header) mode still requires an explicit container boundary.
+      if (!workspaceId || !container) {
+        reject(res, 400, 'The MCP authorization grant has no valid workspace/container scope.')
+        return
+      }
     }
 
     // Stateless mode is intentional for the public service: no in-memory
