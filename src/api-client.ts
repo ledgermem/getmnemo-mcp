@@ -9,10 +9,16 @@
  * https://api.mnemohq.com/openapi.json). See SDK_RECONCILIATION_0.2.0.md.
  *
  * SECURITY: the tenant boundary (`containerTag` or structured `scope`) is
- * supplied once at construction from SERVER CONFIG/ENV — it is NOT a
- * per-call argument the model can set. Every request is pinned to the
- * configured container; callers only provide content/query.
+ * supplied once at construction from SERVER CONFIG/ENV as the DEFAULT
+ * container. For the hosted multi-container model a caller MAY additionally
+ * request a specific container per call; that request is sent as the
+ * `X-Mnemo-Container` header and is VALIDATED SERVER-SIDE against the
+ * connection's allowed set (403 out-of-scope, 400 write-needs-container).
+ * The model can only target containers the connection already permits.
  */
+
+/** Header the API reads to target a specific allowed container per call. */
+export const CONTAINER_HEADER = 'x-mnemo-container'
 
 // confirmed against prod 2026-06-16. Shapes verified from real /v1 payloads.
 export type Memory = {
@@ -146,22 +152,29 @@ export class MnemoApiClient {
   }
 
   /**
-   * Spreads the configured tenant boundary into a request body.
-   * Exactly one of `containerTag` / `scope` is present.
+   * Spreads the effective tenant boundary into a request body. A per-call
+   * `override` container tag (validated server-side) wins over the configured
+   * default; otherwise exactly one of `containerTag` / `scope` is present.
    */
-  private containerBody(): Record<string, unknown> {
+  private containerBody(override?: string): Record<string, unknown> {
+    if (override !== undefined) return { containerTag: override }
     return this.container.containerTag !== undefined
       ? { containerTag: this.container.containerTag }
       : { scope: this.container.scope }
   }
 
-  async search(input: { query: string; limit?: number }): Promise<SearchResponse> {
+  async search(input: { query: string; limit?: number; container?: string }): Promise<SearchResponse> {
     // SearchRequestDto: field is `q` (NOT `query`); containerTag|scope required.
-    return this.request<SearchResponse>('POST', '/v1/search', {
-      q: input.query,
-      ...this.containerBody(),
-      ...(input.limit !== undefined ? { limit: input.limit } : {}),
-    })
+    return this.request<SearchResponse>(
+      'POST',
+      '/v1/search',
+      {
+        q: input.query,
+        ...this.containerBody(input.container),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      },
+      input.container,
+    )
   }
 
   async addMemory(input: {
@@ -170,21 +183,27 @@ export class MnemoApiClient {
     metadata?: Record<string, unknown>
     source?: MemorySource
     idempotencyKey?: string
+    container?: string
   }): Promise<AddResponse> {
     // CreateMemoriesDto: content wrapped in `items[]`; containerTag|scope
     // required at runtime (DTO marks only `items`, but prod 400s without it).
-    return this.request<AddResponse>('POST', '/v1/memories', {
-      items: [
-        {
-          content: input.content,
-          ...(input.memoryType !== undefined ? { memoryType: input.memoryType } : {}),
-          ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-          ...(input.source !== undefined ? { source: input.source } : {}),
-          ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
-        },
-      ],
-      ...this.containerBody(),
-    })
+    return this.request<AddResponse>(
+      'POST',
+      '/v1/memories',
+      {
+        items: [
+          {
+            content: input.content,
+            ...(input.memoryType !== undefined ? { memoryType: input.memoryType } : {}),
+            ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+            ...(input.source !== undefined ? { source: input.source } : {}),
+            ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
+          },
+        ],
+        ...this.containerBody(input.container),
+      },
+      input.container,
+    )
   }
 
   async updateMemory(
@@ -195,34 +214,42 @@ export class MnemoApiClient {
       metadata?: Record<string, unknown> | null
       source?: MemorySource | null
     },
+    container?: string,
   ): Promise<Memory> {
     // UpdateMemoryDto: {content?, memoryType?, metadata?, source?} — all
-    // optional. Direct access is additionally pinned by the configured scope
+    // optional. Direct access is additionally pinned by the effective scope
     // query so same-workspace containers cannot cross read/write boundaries.
     return this.request<Memory>(
       'PATCH',
-      `/v1/memories/${encodeURIComponent(memoryId)}${this.containerQuery()}`,
+      `/v1/memories/${encodeURIComponent(memoryId)}${this.containerQuery(container)}`,
       input,
+      container,
     )
   }
 
-  async getMemory(memoryId: string): Promise<Memory> {
+  async getMemory(memoryId: string, container?: string): Promise<Memory> {
     return this.request<Memory>(
       'GET',
-      `/v1/memories/${encodeURIComponent(memoryId)}${this.containerQuery()}`,
+      `/v1/memories/${encodeURIComponent(memoryId)}${this.containerQuery(container)}`,
+      undefined,
+      container,
     )
   }
 
-  async deleteMemory(memoryId: string): Promise<{ id: string; deleted: true }> {
+  async deleteMemory(memoryId: string, container?: string): Promise<{ id: string; deleted: true }> {
     return this.request<{ id: string; deleted: true }>(
       'DELETE',
-      `/v1/memories/${encodeURIComponent(memoryId)}${this.containerQuery()}`,
+      `/v1/memories/${encodeURIComponent(memoryId)}${this.containerQuery(container)}`,
+      undefined,
+      container,
     )
   }
 
-  private containerQuery(): string {
+  private containerQuery(override?: string): string {
     const params = new URLSearchParams()
-    if (this.container.containerTag !== undefined) {
+    if (override !== undefined) {
+      params.set('containerTag', override)
+    } else if (this.container.containerTag !== undefined) {
       params.set('containerTag', this.container.containerTag)
     } else if (this.container.scope) {
       params.set('scopeType', this.container.scope.type)
@@ -235,33 +262,44 @@ export class MnemoApiClient {
   async listMemories(input?: {
     limit?: number
     cursor?: string
+    container?: string
   }): Promise<{ items: Memory[]; nextCursor: string | null }> {
     // GET /v1/memories filters by containerTag (or scopeType+scopeId), NOT
-    // actorId. Thread the server-configured container as the filter.
+    // actorId. Thread the effective container (per-call override or default).
     const params = new URLSearchParams()
     if (input?.limit !== undefined) params.set('limit', String(input.limit))
     if (input?.cursor !== undefined) params.set('cursor', input.cursor)
-    if (this.container.containerTag !== undefined) {
+    if (input?.container !== undefined) {
+      params.set('containerTag', input.container)
+    } else if (this.container.containerTag !== undefined) {
       params.set('containerTag', this.container.containerTag)
     } else if (this.container.scope) {
       params.set('scopeType', this.container.scope.type)
       params.set('scopeId', this.container.scope.id)
     }
     const qs = params.toString()
-    return this.request('GET', `/v1/memories${qs ? `?${qs}` : ''}`)
+    return this.request('GET', `/v1/memories${qs ? `?${qs}` : ''}`, undefined, input?.container)
   }
 
   private async request<T>(
     method: string,
     path: string,
     body?: unknown,
+    containerHeader?: string,
   ): Promise<T> {
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs)
     try {
+      // Per-call container targeting: when present, the API validates this
+      // header against the connection's allowed set. When absent, no header
+      // is sent and the API falls back to the connection's allowed set.
+      const headers =
+        containerHeader !== undefined
+          ? { ...this.headers, [CONTAINER_HEADER]: containerHeader }
+          : { ...this.headers }
       const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
-        headers: { ...this.headers },
+        headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: ctrl.signal,
       })

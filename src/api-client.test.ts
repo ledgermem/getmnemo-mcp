@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
-import { MnemoApiClient } from './api-client.js'
+import { CONTAINER_HEADER, MnemoApiClient, MnemoApiError } from './api-client.js'
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'content-type': 'application/json' },
   })
+}
+
+function headerOf(init: RequestInit | undefined, name: string): string | undefined {
+  const headers = init?.headers as Record<string, string> | undefined
+  return headers?.[name]
 }
 
 describe('MnemoApiClient', () => {
@@ -65,5 +70,71 @@ describe('MnemoApiClient', () => {
 
     expect(fetchImpl.mock.calls[0]?.[0]).toContain('containerTag=user%3Atest')
     expect(fetchImpl.mock.calls[1]?.[0]).toContain('containerTag=user%3Atest')
+  })
+
+  it('omits the container header when no per-call container is given', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response({ results: [] }))
+    const client = new MnemoApiClient({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'prfly_live_test',
+      workspaceId: 'workspace',
+      container: { containerTag: 'user:test' },
+      fetch: fetchImpl,
+    })
+
+    await client.search({ query: 'hello' })
+
+    const [, init] = fetchImpl.mock.calls[0] ?? []
+    expect(headerOf(init, CONTAINER_HEADER)).toBeUndefined()
+  })
+
+  it('sends the container header and overrides body/query when a per-call container is given', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => response({ results: [], items: [] }))
+    const client = new MnemoApiClient({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'prfly_live_test',
+      workspaceId: 'workspace',
+      container: { containerTag: 'user:default' },
+      fetch: fetchImpl,
+    })
+
+    await client.search({ query: 'hello', container: 'team:acme' })
+    await client.addMemory({ content: 'a fact', container: 'team:acme' })
+    await client.getMemory('memory-1', 'team:acme')
+
+    // search: header set, body containerTag overridden to the per-call value.
+    const [, searchInit] = fetchImpl.mock.calls[0] ?? []
+    expect(headerOf(searchInit, CONTAINER_HEADER)).toBe('team:acme')
+    expect(JSON.parse(String(searchInit?.body))).toMatchObject({ containerTag: 'team:acme' })
+
+    // add: header set, body containerTag overridden.
+    const [, addInit] = fetchImpl.mock.calls[1] ?? []
+    expect(headerOf(addInit, CONTAINER_HEADER)).toBe('team:acme')
+    expect(JSON.parse(String(addInit?.body))).toMatchObject({ containerTag: 'team:acme' })
+
+    // get: header set, query pinned to the per-call value.
+    const [getUrl, getInit] = fetchImpl.mock.calls[2] ?? []
+    expect(headerOf(getInit, CONTAINER_HEADER)).toBe('team:acme')
+    expect(String(getUrl)).toContain('containerTag=team%3Aacme')
+  })
+
+  it('surfaces API errors with status for container-scope rejections', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => response({ message: 'container not allowed' }, 403))
+    const client = new MnemoApiClient({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'prfly_live_test',
+      workspaceId: 'workspace',
+      container: { containerTag: 'user:default' },
+      fetch: fetchImpl,
+    })
+
+    await expect(client.search({ query: 'hi', container: 'team:forbidden' })).rejects.toMatchObject({
+      status: 403,
+    })
+    await expect(client.search({ query: 'hi' })).rejects.toBeInstanceOf(MnemoApiError)
   })
 })
