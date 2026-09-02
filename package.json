@@ -1,6 +1,6 @@
 {
   "name": "getmnemo-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Model Context Protocol server for Mnemo Memory — exposes search/add/update/delete tools to Claude Desktop, Cursor, Windsurf, VS Code, Zed.",
   "type": "module",
   "license": "MIT",
@@ -39,6 +39,7 @@
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
+    "typescript-eslint": "^8.69.0",
     "vitest": "^2.1.8"
   },
   "publishConfig": {

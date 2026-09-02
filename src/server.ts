@@ -2,7 +2,9 @@
  * MCP server factory.
  *
  * Exposes memory tools to MCP clients (Claude Desktop, Cursor, Windsurf, VS
- * Code, Zed): search, add, get, update, delete, and list.
+ * Code, Zed): search, add, get, update, delete, and list — plus the
+ * personal-memory tools (daily brief, timeline, people, reminders, meetings,
+ * merge) defined in personal-tools.ts.
  *
  * Transport-agnostic — wire to stdio (cli.ts) or HTTP/SSE (http.ts).
  */
@@ -18,6 +20,27 @@ import {
 import { z } from 'zod'
 
 import { MnemoApiClient, type ApiClientConfig, MnemoApiError } from './api-client.js'
+import {
+  PERSONAL_TOOLS,
+  PERSONAL_TOOL_INFO,
+  dispatchPersonalTool,
+  formatPersonalApiError,
+  isPersonalTool,
+} from './personal-tools.js'
+
+/** Advertised in the MCP initialize handshake; pinned to package.json by server.test.ts. */
+export const SERVER_VERSION = '0.3.0'
+
+/**
+ * Who authenticated this session. Hosted OAuth grants are rejected by the API
+ * on every cross-container personal-memory route, so those tools are not
+ * listed to `oauth` sessions at all (calling one anyway yields a clear 403).
+ */
+export type ServerPrincipal = 'api_key' | 'oauth'
+
+export type ServerOptions = {
+  principal?: ServerPrincipal
+}
 
 // SECURITY: tool inputs expose content/query knobs plus an OPTIONAL `container`
 // tag for the hosted multi-container model. The container is NOT a free tenant
@@ -92,7 +115,7 @@ const ListInput = z.object({
   container: containerField,
 })
 
-const TOOLS: Tool[] = [
+const MEMORY_TOOLS: Tool[] = [
   {
     name: 'memory_search',
     description:
@@ -181,14 +204,24 @@ const TOOLS: Tool[] = [
   },
 ]
 
-export function createServer(cfg: ApiClientConfig): Server {
+/** Tools visible to a session: every memory tool plus the personal tools its principal may call. */
+export function toolsForPrincipal(principal: ServerPrincipal): Tool[] {
+  const personal =
+    principal === 'oauth'
+      ? PERSONAL_TOOLS.filter((t) => isPersonalTool(t.name) && PERSONAL_TOOL_INFO[t.name].oauth)
+      : PERSONAL_TOOLS
+  return [...MEMORY_TOOLS, ...personal]
+}
+
+export function createServer(cfg: ApiClientConfig, options: ServerOptions = {}): Server {
   const api = new MnemoApiClient(cfg)
+  const tools = toolsForPrincipal(options.principal ?? 'api_key')
   const server = new Server(
-    { name: 'getmnemo', version: '0.2.0' },
+    { name: 'getmnemo', version: SERVER_VERSION },
     { capabilities: { tools: {} } },
   )
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }))
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params
@@ -201,7 +234,9 @@ export function createServer(cfg: ApiClientConfig): Server {
       if (err instanceof McpError) throw err
       const message =
         err instanceof MnemoApiError
-          ? formatApiError(err, requestedContainer(args))
+          ? isPersonalTool(name)
+            ? formatPersonalApiError(err, name)
+            : formatApiError(err, requestedContainer(args))
           : err instanceof z.ZodError
             ? `Invalid arguments: ${err.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')}`
             : err instanceof Error
@@ -290,6 +325,7 @@ async function dispatch(
       return api.listMemories({ limit: i.limit, cursor: i.cursor, container: i.container })
     }
     default:
+      if (isPersonalTool(name)) return dispatchPersonalTool(api, name, raw)
       throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`)
   }
 }
