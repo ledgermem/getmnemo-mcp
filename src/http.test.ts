@@ -139,6 +139,53 @@ describe('hosted OAuth session establishment', () => {
     expect(result.status).toBe(200)
   })
 
+  async function listTools(port: number): Promise<{ status: number; names: string[] }> {
+    const result = await call(port, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer header.payload.signature',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+    })
+    // Stateless transport answers over SSE: pull the JSON-RPC payload out of the data: lines.
+    const payloads = result.body
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => JSON.parse(line.slice(5).trim()) as { result?: { tools?: Array<{ name: string }> } })
+    const names = payloads.flatMap((p) => (p.result?.tools ?? []).map((t) => t.name))
+    return { status: result.status, names }
+  }
+
+  it('hides API-key-only personal tools from an OAuth session over the real transport', async () => {
+    stubIntrospect({ tenantId: 'workspace', containerTags: ['user:jane'] })
+    const server = createMcpHttpServer({ GETMNEMO_API_URL: 'https://api.example.com' })
+    await new Promise<void>((resolve) => server.listen(0, resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('server did not bind')
+
+    const result = await listTools(address.port)
+    await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()))
+
+    expect(result.status).toBe(200)
+    expect(result.names).toContain('memory_search')
+    expect(result.names).toContain('memory_add')
+    expect(result.names).toContain('memory_timeline')
+    for (const hidden of [
+      'daily_brief',
+      'people_list',
+      'people_get',
+      'people_upsert',
+      'reminder_create',
+      'reminders_upcoming',
+      'reminder_complete',
+      'meeting_brief',
+      'meetings_upcoming',
+      'memory_merge',
+    ]) expect(result.names, hidden).not.toContain(hidden)
+  })
+
   it('still rejects an OAuth grant with no workspace scope', async () => {
     stubIntrospect({ containerTags: [] })
     const server = createMcpHttpServer({ GETMNEMO_API_URL: 'https://api.example.com' })
