@@ -17,6 +17,27 @@
  * The model can only target containers the connection already permits.
  */
 
+import type {
+  CreatePersonInput,
+  CreateReminderInput,
+  DailyBrief,
+  DailyBriefInput,
+  ListPeopleInput,
+  ListPeopleResponse,
+  MeetingBrief,
+  MergeMemoriesInput,
+  MergeMemoriesResponse,
+  PersonRecord,
+  ReminderRecord,
+  TimelineInput,
+  TimelineResponse,
+  UpcomingMeetingsInput,
+  UpcomingMeetingsResponse,
+  UpcomingRemindersInput,
+  UpcomingRemindersResponse,
+  UpdatePersonInput,
+} from './personal-types.js'
+
 /** Header the API reads to target a specific allowed container per call. */
 export const CONTAINER_HEADER = 'x-mnemo-container'
 
@@ -117,6 +138,13 @@ export type ApiClientConfig = {
 }
 
 export class MnemoApiError extends Error {
+  /**
+   * Stable machine-readable code from the API error envelope
+   * (`FEATURE_DISABLED`, `PERSON_NOT_FOUND`, `NOT_A_REMINDER`, ...). Only
+   * the personal-memory routes emit one; undefined otherwise.
+   */
+  readonly code: string | undefined
+
   constructor(
     message: string,
     readonly status: number,
@@ -124,7 +152,16 @@ export class MnemoApiError extends Error {
   ) {
     super(message)
     this.name = 'MnemoApiError'
+    this.code = errorCodeOf(body)
   }
+}
+
+function errorCodeOf(body: unknown): string | undefined {
+  if (body && typeof body === 'object' && 'code' in body) {
+    const code = (body as { code: unknown }).code
+    if (typeof code === 'string' && code.length > 0) return code
+  }
+  return undefined
 }
 
 export class MnemoApiClient {
@@ -256,7 +293,11 @@ export class MnemoApiClient {
     )
   }
 
-  private containerQuery(override?: string): string {
+  /**
+   * Query-string form of the effective tenant boundary (per-call override,
+   * else the configured default, else nothing for hosted all/multi grants).
+   */
+  private containerParams(override?: string): URLSearchParams {
     const params = new URLSearchParams()
     if (override !== undefined) {
       params.set('containerTag', override)
@@ -266,8 +307,11 @@ export class MnemoApiClient {
       params.set('scopeType', this.container.scope.type)
       params.set('scopeId', this.container.scope.id)
     }
-    const query = params.toString()
-    return query ? `?${query}` : ''
+    return params
+  }
+
+  private containerQuery(override?: string): string {
+    return queryString(this.containerParams(override))
   }
 
   async listMemories(input?: {
@@ -277,19 +321,118 @@ export class MnemoApiClient {
   }): Promise<{ items: Memory[]; nextCursor: string | null }> {
     // GET /v1/memories filters by containerTag (or scopeType+scopeId), NOT
     // actorId. Thread the effective container (per-call override or default).
-    const params = new URLSearchParams()
+    const params = this.containerParams(input?.container)
     if (input?.limit !== undefined) params.set('limit', String(input.limit))
     if (input?.cursor !== undefined) params.set('cursor', input.cursor)
-    if (input?.container !== undefined) {
-      params.set('containerTag', input.container)
-    } else if (this.container?.containerTag !== undefined) {
-      params.set('containerTag', this.container.containerTag)
-    } else if (this.container?.scope) {
-      params.set('scopeType', this.container.scope.type)
-      params.set('scopeId', this.container.scope.id)
-    }
-    const qs = params.toString()
-    return this.request('GET', `/v1/memories${qs ? `?${qs}` : ''}`, undefined, input?.container)
+    return this.request('GET', `/v1/memories${queryString(params)}`, undefined, input?.container)
+  }
+
+  // ---------------------------------------------------------------------
+  // Personal-memory surface (API v0.3.0). Container-scoped reads (brief,
+  // timeline, merge) thread the effective container like the memory ops.
+  // People, reminders and meetings are cross-container by nature: the
+  // configured default is NOT applied to them, only an explicit filter.
+  // ---------------------------------------------------------------------
+
+  /** GET /v1/brief — the composed day for one container. */
+  async getDailyBrief(input: DailyBriefInput): Promise<DailyBrief> {
+    const params = this.containerParams(input.container)
+    setParam(params, 'date', input.date)
+    setParam(params, 'timezone', input.timezone)
+    setParam(params, 'days', input.days)
+    setParam(params, 'sections', input.sections?.join(','))
+    return this.request<DailyBrief>('GET', `/v1/brief${queryString(params)}`, undefined, input.container)
+  }
+
+  /** GET /v1/timeline — one container as a single time-ordered stream. */
+  async getTimeline(input: TimelineInput): Promise<TimelineResponse> {
+    const params = this.containerParams(input.container)
+    setParam(params, 'from', input.from)
+    setParam(params, 'to', input.to)
+    setParam(params, 'types', input.types?.join(','))
+    setParam(params, 'direction', input.direction)
+    setParam(params, 'limit', input.limit)
+    setParam(params, 'cursor', input.cursor)
+    return this.request<TimelineResponse>('GET', `/v1/timeline${queryString(params)}`, undefined, input.container)
+  }
+
+  /** GET /v1/people */
+  async listPeople(input: ListPeopleInput = {}): Promise<ListPeopleResponse> {
+    const params = new URLSearchParams()
+    setParam(params, 'q', input.q)
+    setParam(params, 'includeArchived', input.includeArchived)
+    setParam(params, 'limit', input.limit)
+    setParam(params, 'cursor', input.cursor)
+    return this.request<ListPeopleResponse>('GET', `/v1/people${queryString(params)}`)
+  }
+
+  /** GET /v1/people/{slug} */
+  async getPerson(slug: string): Promise<PersonRecord> {
+    return this.request<PersonRecord>('GET', `/v1/people/${encodeURIComponent(slug)}`)
+  }
+
+  /** POST /v1/people */
+  async createPerson(input: CreatePersonInput): Promise<PersonRecord> {
+    return this.request<PersonRecord>('POST', '/v1/people', compact(input))
+  }
+
+  /** PATCH /v1/people/{slug} — explicit `null` clears a field. */
+  async updatePerson(slug: string, input: UpdatePersonInput): Promise<PersonRecord> {
+    return this.request<PersonRecord>('PATCH', `/v1/people/${encodeURIComponent(slug)}`, compact(input))
+  }
+
+  /** POST /v1/reminders — personSlug, else container (per-call or default). */
+  async createReminder(input: CreateReminderInput): Promise<ReminderRecord> {
+    const { personSlug, container, ...rest } = input
+    const target = personSlug !== undefined ? { personSlug } : this.containerBody(container)
+    return this.request<ReminderRecord>('POST', '/v1/reminders', { ...compact(rest), ...target }, container)
+  }
+
+  /** GET /v1/reminders/upcoming — workspace-wide unless a container filter is given. */
+  async listUpcomingReminders(input: UpcomingRemindersInput = {}): Promise<UpcomingRemindersResponse> {
+    const params = new URLSearchParams()
+    setParam(params, 'days', input.days)
+    setParam(params, 'timezone', input.timezone)
+    setParam(params, 'containerType', input.containerType)
+    setParam(params, 'containerTag', input.container)
+    setParam(params, 'limit', input.limit)
+    return this.request<UpcomingRemindersResponse>('GET', `/v1/reminders/upcoming${queryString(params)}`)
+  }
+
+  /** POST /v1/reminders/{memoryId}/complete */
+  async completeReminder(memoryId: string): Promise<ReminderRecord> {
+    return this.request<ReminderRecord>('POST', `/v1/reminders/${encodeURIComponent(memoryId)}/complete`)
+  }
+
+  /** GET /v1/meetings/upcoming */
+  async listUpcomingMeetings(input: UpcomingMeetingsInput = {}): Promise<UpcomingMeetingsResponse> {
+    const params = new URLSearchParams()
+    setParam(params, 'days', input.days)
+    setParam(params, 'limit', input.limit)
+    setParam(params, 'cursor', input.cursor)
+    setParam(params, 'containerTag', input.container)
+    return this.request<UpcomingMeetingsResponse>('GET', `/v1/meetings/upcoming${queryString(params)}`)
+  }
+
+  /** GET /v1/meetings/{documentId}/brief */
+  async getMeetingBrief(documentId: string, q?: string): Promise<MeetingBrief> {
+    const params = new URLSearchParams()
+    setParam(params, 'q', q)
+    return this.request<MeetingBrief>(
+      'GET',
+      `/v1/meetings/${encodeURIComponent(documentId)}/brief${queryString(params)}`,
+    )
+  }
+
+  /** POST /v1/memories/merge — needs memories:write AND memories:delete. */
+  async mergeMemories(input: MergeMemoriesInput): Promise<MergeMemoriesResponse> {
+    const { container, ...rest } = input
+    return this.request<MergeMemoriesResponse>(
+      'POST',
+      '/v1/memories/merge',
+      { ...compact(rest), ...this.containerBody(container) },
+      container,
+    )
   }
 
   private async request<T>(
@@ -335,6 +478,22 @@ export class MnemoApiClient {
       clearTimeout(timer)
     }
   }
+}
+
+/** Set a query param when defined; numbers/booleans are stringified (`'true'|'false'`). */
+function setParam(params: URLSearchParams, key: string, value: string | number | boolean | undefined): void {
+  if (value === undefined) return
+  params.set(key, String(value))
+}
+
+function queryString(params: URLSearchParams): string {
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
+
+/** Drop `undefined` members so the API's forbidNonWhitelisted pipe never sees stray keys. */
+function compact<T extends Record<string, unknown>>(input: T): Partial<T> {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as Partial<T>
 }
 
 function safeJson(s: string): unknown {

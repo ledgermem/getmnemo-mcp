@@ -1,4 +1,19 @@
-export { createServer } from './server.js'
+export {
+  createServer,
+  toolsForPrincipal,
+  SERVER_VERSION,
+  type ServerOptions,
+  type ServerPrincipal,
+} from './server.js'
+export {
+  PERSONAL_TOOLS,
+  PERSONAL_TOOL_INFO,
+  PERSONAL_TOOL_NAMES,
+  slugifyDisplayName,
+  type PersonalToolInfo,
+  type PersonalToolName,
+} from './personal-tools.js'
+export type * from './personal-types.js'
 export {
   resolveContainerFromEnv,
   resolveContainerFromHeaders,

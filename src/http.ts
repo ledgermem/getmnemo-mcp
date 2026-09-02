@@ -116,7 +116,8 @@ export function createMcpHttpServer(env: EnvLike = process.env) {
     // `undefined` default container is valid for OAuth all/multi-container
     // grants (the API resolves scope from the grant + per-call header).
     let container: ContainerScope | undefined
-    if (credential.split('.').length === 3) {
+    const isOAuthToken = credential.split('.').length === 3
+    if (isOAuthToken) {
       const introspection = await fetch(`${apiUrl}/v1/mcp/oauth/introspect`, {
         headers: { authorization: `Bearer ${credential}` },
         signal: AbortSignal.timeout(5_000),
@@ -155,12 +156,12 @@ export function createMcpHttpServer(env: EnvLike = process.env) {
     // session map means Azure replicas can serve subsequent MCP requests
     // without sticky routing or shared session storage.
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-    const server = createServer({
-      baseUrl: apiUrl,
-      apiKey: credential,
-      workspaceId,
-      container,
-    })
+    // OAuth sessions do not see the API-key-only personal-memory tools: the
+    // API denies MCP tokens on every cross-container route.
+    const server = createServer(
+      { baseUrl: apiUrl, apiKey: credential, workspaceId, container },
+      { principal: isOAuthToken ? 'oauth' : 'api_key' },
+    )
     await server.connect(transport)
     await transport.handleRequest(req, res)
     await server.close()

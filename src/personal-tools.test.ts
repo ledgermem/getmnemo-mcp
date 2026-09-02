@@ -65,6 +65,8 @@ function requestAt(fetchImpl: FetchMock, index: number): { url: URL; init: Reque
   return { url: new URL(String(call[0])), init, body: init?.body ? JSON.parse(String(init.body)) : undefined }
 }
 
+const MEETING_ID = '1d1c6d8e-8a3e-4b1a-9d26-7d4f3f9e0a11'
+
 const NEW_TOOL_NAMES = [
   'daily_brief',
   'memory_timeline',
@@ -216,6 +218,17 @@ describe('personal-memory tool dispatch', () => {
     expect(patch.body).toEqual({ displayName: 'Alice Smith', company: 'Acme' })
   })
 
+  it('people_upsert explains a 409 whose derived slug does not resolve', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(apiError(409, 'PERSON_EXISTS', 'exists'))
+      .mockResolvedValueOnce(apiError(404, 'PERSON_NOT_FOUND', 'missing'))
+    h = await harness(fetchImpl)
+    const result = await h.call('people_upsert', { displayName: 'Alice Smith' })
+    expect(result.isError).toBe(true)
+    expect(result.text).toMatch(/pass their slug explicitly/)
+  })
+
   it('people_upsert with an explicit slug patches first and creates on 404', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
@@ -284,15 +297,19 @@ describe('personal-memory tool dispatch', () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(response({ items: [], nextCursor: null, connections: [] }))
-      .mockResolvedValueOnce(response({ documentId: 'd1', brief: null }))
+      .mockResolvedValueOnce(response({ documentId: MEETING_ID, brief: null }))
     h = await harness(fetchImpl)
     await h.call('meetings_upcoming', { days: 2 })
     expect(requestAt(fetchImpl, 0).url.pathname).toBe('/v1/meetings/upcoming')
     expect(requestAt(fetchImpl, 0).url.searchParams.get('days')).toBe('2')
 
-    await h.call('meeting_brief', { documentId: 'd1', q: 'what is open?' })
+    const notUuid = await h.call('meeting_brief', { documentId: 'd1' })
+    expect(notUuid.isError).toBe(true)
+    expect(notUuid.text).toMatch(/documentId/)
+
+    await h.call('meeting_brief', { documentId: MEETING_ID, q: 'what is open?' })
     const brief = requestAt(fetchImpl, 1).url
-    expect(brief.pathname).toBe('/v1/meetings/d1/brief')
+    expect(brief.pathname).toBe(`/v1/meetings/${MEETING_ID}/brief`)
     expect(brief.searchParams.get('q')).toBe('what is open?')
   })
 

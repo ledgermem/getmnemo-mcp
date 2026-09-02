@@ -189,7 +189,7 @@ describe('MnemoApiClient personal-memory surface', () => {
     })
 
     it('lists upcoming reminders workspace-wide unless a container filter is given', async () => {
-      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response({ overdue: [], dueToday: [], upcoming: [] }))
+      const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => response({ overdue: [], dueToday: [], upcoming: [] }))
       const api = client(fetchImpl, { containerTag: 'user:jane' })
       await api.listUpcomingReminders({ days: 14, timezone: 'Asia/Karachi', containerType: 'person', limit: 20 })
       let parsed = new URL(lastCall(fetchImpl).url)
@@ -234,7 +234,7 @@ describe('MnemoApiClient personal-memory surface', () => {
     })
 
     it('fetches a meeting brief with an optional question', async () => {
-      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response({ documentId: 'd1' }))
+      const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => response({ documentId: 'd1' }))
       const api = client(fetchImpl)
       await api.getMeetingBrief('d1')
       expect(lastCall(fetchImpl).url).toBe('https://api.example.com/v1/meetings/d1/brief')
