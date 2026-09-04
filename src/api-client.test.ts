@@ -168,3 +168,57 @@ describe('MnemoApiClient', () => {
     await expect(client.search({ query: 'hi' })).rejects.toBeInstanceOf(MnemoApiError)
   })
 })
+
+// --- Regression: eval findings 2026-09-04 -----------------------------------
+// The server required GETMNEMO_WORKSPACE_ID and always sent `x-workspace-id`,
+// a header the platform retired (SDK 0.5.1 dropped it and asserts it is null).
+// The tenant is implied by the API key, so a workspace id must be OPTIONAL —
+// an override, not a precondition.
+describe('workspaceId is optional', () => {
+  it('constructs and calls without a workspaceId', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response({ results: [] }))
+    const client = new MnemoApiClient({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'prfly_live_test',
+      container: { containerTag: 'user:test' },
+      fetch: fetchImpl,
+    })
+
+    await client.search({ query: 'anything' })
+
+    const init = fetchImpl.mock.calls[0]?.[1]
+    expect(headerOf(init, 'x-workspace-id')).toBeUndefined()
+  })
+
+  it('still sends x-workspace-id when one is explicitly configured', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response({ results: [] }))
+    const client = new MnemoApiClient({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'prfly_live_test',
+      workspaceId: 'ws-123',
+      container: { containerTag: 'user:test' },
+      fetch: fetchImpl,
+    })
+
+    await client.search({ query: 'anything' })
+
+    expect(headerOf(fetchImpl.mock.calls[0]?.[1], 'x-workspace-id')).toBe('ws-123')
+  })
+
+  it('resolves the workspace from the key via /v1/whoami', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        response({ workspaceId: 'ws-from-key', workspaceName: 'W', keyId: 'k', keyName: null, scopes: [] }),
+      )
+    const client = new MnemoApiClient({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'prfly_live_test',
+      container: { containerTag: 'user:test' },
+      fetch: fetchImpl,
+    })
+
+    await expect(client.whoAmI()).resolves.toMatchObject({ workspaceId: 'ws-from-key' })
+    expect(fetchImpl.mock.calls[0]?.[0]).toContain('/v1/whoami')
+  })
+})

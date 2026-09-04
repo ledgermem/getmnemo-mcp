@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.1 — 2026-09-04
+
+Fixes found while integrating Mnemo into a real third-party project (AI-SHIPR).
+
+### Fixed
+- **`GETMNEMO_WORKSPACE_ID` is no longer required.** The API derives the tenant
+  from the API key, and `x-workspace-id` was retired in SDK 0.5.1. The server now
+  starts without it and only sends the header when a workspace is explicitly
+  configured. Requiring it forced every integrator to hunt for an id the platform
+  no longer needs.
+- **The startup error names the variable that is actually missing.** It used to
+  say "missing GETMNEMO_API_KEY and/or GETMNEMO_WORKSPACE_ID", which sends you to
+  debug the wrong one.
+
+### Added
+- **`whoAmI()`** on the API client, backed by the new `GET /v1/whoami`. Resolves
+  the workspace, key id/label and granted scopes from the key itself, so a
+  workspace id never has to be configured by hand. Requires no scope.
+
+### Notes
+- `memory_timeline` previously failed with `403 Key missing required scope(s):
+  timeline:read` for most keys. The root cause was in the API's default scope set
+  (a standard key was missing read scopes a read-only key had) and is fixed
+  there; it takes effect for keys minted after that API deploy.
+
 All notable changes to `getmnemo-mcp` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 

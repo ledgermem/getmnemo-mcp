@@ -5,7 +5,7 @@
  * Reads config from env (developer-supplied at server startup):
  *   GETMNEMO_API_URL       (default: https://api.mnemohq.com)
  *   GETMNEMO_API_KEY       (required)
- *   GETMNEMO_WORKSPACE_ID  (required)
+ *   GETMNEMO_WORKSPACE_ID  (optional — derived from the key; set only to pin one)
  *   GETMNEMO_CONTAINER_TAG (the tenant boundary, e.g. "user:jane")
  *     — required UNLESS GETMNEMO_SCOPE_TYPE + GETMNEMO_SCOPE_ID are set.
  *   GETMNEMO_SCOPE_TYPE / GETMNEMO_SCOPE_ID (structured-scope alternative)
@@ -20,10 +20,14 @@ import { resolveContainerFromEnv } from './config.js'
 
 async function main(): Promise<void> {
   const apiKey = process.env.GETMNEMO_API_KEY
+  // OPTIONAL since 0.3.1. The API derives the tenant from the key, so a
+  // workspace id is an override for pinning an older deployment — not a
+  // precondition. Requiring it made every integrator hunt for an id the
+  // platform had already retired.
   const workspaceId = process.env.GETMNEMO_WORKSPACE_ID
-  if (!apiKey || !workspaceId) {
+  if (!apiKey) {
     process.stderr.write(
-      'Mnemo MCP: missing GETMNEMO_API_KEY and/or GETMNEMO_WORKSPACE_ID env vars.\n' +
+      'Mnemo MCP: GETMNEMO_API_KEY is not set.\n' +
         'Get a key at https://app.mnemohq.com/settings/api-keys\n',
     )
     process.exit(1)
