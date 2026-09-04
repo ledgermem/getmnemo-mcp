@@ -122,7 +122,8 @@ export type ContainerScope =
 export type ApiClientConfig = {
   baseUrl: string
   apiKey: string
-  workspaceId: string
+  /** Optional. The tenant is implied by the API key; this only pins it. */
+  workspaceId?: string
   /**
    * DEFAULT tenant boundary, supplied at server startup (env) or from an
    * OAuth grant. Local (stdio/header) mode REQUIRES it — every call is pinned
@@ -178,18 +179,20 @@ export class MnemoApiClient {
 
   constructor(cfg: ApiClientConfig) {
     if (!cfg.apiKey) throw new Error('apiKey is required')
-    if (!cfg.workspaceId) throw new Error('workspaceId is required')
     // A default container is optional (hosted OAuth all/multi grants omit it),
     // but if one IS supplied it must be a valid form.
     if (cfg.container && !cfg.container.containerTag && !cfg.container.scope) {
       throw new Error('container, when set, must have a containerTag or scope')
     }
     this.baseUrl = cfg.baseUrl.replace(/\/$/, '')
+    // The API derives the tenant from the key; `x-workspace-id` was retired
+    // (SDK 0.5.1 dropped it and asserts it is null). It is sent ONLY when a
+    // workspace is explicitly configured, so an operator can still pin one
+    // against an older deployment without every integrator being forced to
+    // find an id they do not need. Resolve it from the key with whoAmI().
     this.headers = {
-      // Both schemes are REQUIRED per the spec: bearer (prfly_live_* key) +
-      // workspace (x-workspace-id header) on every /v1 op.
       'authorization': `Bearer ${cfg.apiKey}`,
-      'x-workspace-id': cfg.workspaceId,
+      ...(cfg.workspaceId ? { 'x-workspace-id': cfg.workspaceId } : {}),
       'content-type': 'application/json',
       'user-agent': '@mnemo/mcp-server',
     }
@@ -209,6 +212,21 @@ export class MnemoApiClient {
     if (this.container?.scope) return { scope: this.container.scope }
     // Unset (hosted all/multi grant): the API resolves scope from the grant.
     return {}
+  }
+
+  /**
+   * Key introspection — GET /v1/whoami. Resolves the workspace (and the scopes)
+   * the presented key actually holds, so a caller never has to configure a
+   * workspace id by hand. Requires no scope beyond a valid key.
+   */
+  async whoAmI(): Promise<{
+    workspaceId: string
+    workspaceName: string | null
+    keyId: string
+    keyName: string | null
+    scopes: string[]
+  }> {
+    return this.request('GET', '/v1/whoami')
   }
 
   async search(input: { query: string; limit?: number; container?: string }): Promise<SearchResponse> {
