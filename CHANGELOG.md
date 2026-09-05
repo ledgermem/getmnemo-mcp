@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.2 — 2026-09-05
+
+### Added
+- **`polarity` filter on `memory_search`.** Optional `"positive" | "negative" |
+  "neutral"` param, mapped to `/v1/search`'s polarity filter. Server-side it
+  restricts results to that polarity **with coverage**: matching-polarity
+  memories in scope are returned even when the query never mentions them
+  (stamped `metadata.polarityCoverage: true`). Use `polarity: "negative"` to
+  pull the standing hard constraints before acting on a plan or proposal.
+  The field is only sent when set, so older API servers (which reject unknown
+  properties) are unaffected.
+
 ## 0.3.1 — 2026-09-04
 
 Fixes found while integrating Mnemo into a real third-party project (AI-SHIPR).
