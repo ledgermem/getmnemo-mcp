@@ -211,7 +211,7 @@ describe('memory_search polarity over the real transport', () => {
     const searchBodies: unknown[] = []
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
         const href = String(url)
         if (href.includes('/v1/search')) {
           searchBodies.push(JSON.parse(String(init?.body)))
