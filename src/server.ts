@@ -29,7 +29,7 @@ import {
 } from './personal-tools.js'
 
 /** Advertised in the MCP initialize handshake; pinned to package.json by server.test.ts. */
-export const SERVER_VERSION = '0.3.0'
+export const SERVER_VERSION = '0.3.2'
 
 /**
  * Who authenticated this session. Hosted OAuth grants are rejected by the API
@@ -60,6 +60,12 @@ const SearchInput = z.object({
   query: z.string().min(1).max(2000).describe('Natural-language search query.'),
   limit: z.number().int().min(1).max(50).default(8).describe('Max number of memories to return.'),
   container: containerField,
+  polarity: z
+    .enum(['positive', 'negative', 'neutral'])
+    .optional()
+    .describe(
+      'Restrict results to one polarity, with coverage: matching-polarity memories in scope are included even when the query never mentions them. Use "negative" to pull the standing hard constraints (things that must not be done) before acting on a plan or proposal.',
+    ),
 })
 
 // Cap metadata size so a malicious or buggy client cannot push a 10MB blob
@@ -126,6 +132,12 @@ const MEMORY_TOOLS: Tool[] = [
         query: { type: 'string', description: 'Natural-language search query.' },
         limit: { type: 'integer', minimum: 1, maximum: 50, default: 8 },
         container: { type: 'string', description: CONTAINER_DESCRIPTION },
+        polarity: {
+          type: 'string',
+          enum: ['positive', 'negative', 'neutral'],
+          description:
+            'Restrict results to one polarity, with coverage: matching-polarity memories in scope are included even when the query never mentions them. Use "negative" to pull the standing hard constraints (things that must not be done) before acting on a plan or proposal.',
+        },
       },
       required: ['query'],
     },
@@ -286,7 +298,12 @@ async function dispatch(
   switch (name) {
     case 'memory_search': {
       const i = SearchInput.parse(raw)
-      return api.search({ query: i.query, limit: i.limit, container: i.container })
+      return api.search({
+        query: i.query,
+        limit: i.limit,
+        container: i.container,
+        polarity: i.polarity,
+      })
     }
     case 'memory_add': {
       const i = AddInput.parse(raw)

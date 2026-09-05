@@ -222,3 +222,30 @@ describe('workspaceId is optional', () => {
     expect(fetchImpl.mock.calls[0]?.[0]).toContain('/v1/whoami')
   })
 })
+
+describe('search polarity', () => {
+  function polarityClient() {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response({ results: [] }))
+    const client = new MnemoApiClient({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'prfly_live_test',
+      container: { containerTag: 'user:test' },
+      fetch: fetchImpl,
+    })
+    return { client, fetchImpl }
+  }
+
+  it('sends polarity only when set', async () => {
+    const { client, fetchImpl } = polarityClient()
+    await client.search({ query: 'constraints', polarity: 'negative' })
+    const [, init] = fetchImpl.mock.calls[0] ?? []
+    expect(JSON.parse(String(init?.body))).toMatchObject({ polarity: 'negative' })
+  })
+
+  it('omits polarity from the body when not set (older servers 400 unknown fields)', async () => {
+    const { client, fetchImpl } = polarityClient()
+    await client.search({ query: 'hello' })
+    const [, init] = fetchImpl.mock.calls[0] ?? []
+    expect(JSON.parse(String(init?.body))).not.toHaveProperty('polarity')
+  })
+})
