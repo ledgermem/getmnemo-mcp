@@ -229,8 +229,15 @@ export class MnemoApiClient {
     return this.request('GET', '/v1/whoami')
   }
 
-  async search(input: { query: string; limit?: number; container?: string }): Promise<SearchResponse> {
+  async search(input: {
+    query: string
+    limit?: number
+    container?: string
+    polarity?: 'positive' | 'negative' | 'neutral'
+  }): Promise<SearchResponse> {
     // SearchRequestDto: field is `q` (NOT `query`); containerTag|scope required.
+    // polarity is only sent when set — the API 400s unknown properties, so an
+    // absent field must stay absent for older servers.
     return this.request<SearchResponse>(
       'POST',
       '/v1/search',
@@ -238,6 +245,7 @@ export class MnemoApiClient {
         q: input.query,
         ...this.containerBody(input.container),
         ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        ...(input.polarity !== undefined ? { polarity: input.polarity } : {}),
       },
       input.container,
     )

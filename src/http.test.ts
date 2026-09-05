@@ -199,3 +199,94 @@ describe('hosted OAuth session establishment', () => {
     expect(result.status).toBe(400)
   })
 })
+
+describe('memory_search polarity over the real transport', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  // Route-aware fetch stub: introspect returns the grant, /v1/search records
+  // its body and returns an empty result set.
+  function stubApi(): { searchBodies: unknown[] } {
+    const searchBodies: unknown[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        const href = String(url)
+        if (href.includes('/v1/search')) {
+          searchBodies.push(JSON.parse(String(init?.body)))
+          return new Response(JSON.stringify({ results: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Response(
+          JSON.stringify({ tenantId: 'workspace', containerTags: ['user:jane'] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }),
+    )
+    return { searchBodies }
+  }
+
+  async function callTool(
+    port: number,
+    args: Record<string, unknown>,
+  ): Promise<{ status: number; errorMessages: string[] }> {
+    const result = await call(port, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer header.payload.signature',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'memory_search', arguments: args },
+      }),
+    })
+    const payloads = result.body
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map(
+        (line) =>
+          JSON.parse(line.slice(5).trim()) as {
+            result?: { isError?: boolean; content?: Array<{ text?: string }> }
+          },
+      )
+    const errorMessages = payloads.flatMap((p) =>
+      p.result?.isError ? (p.result.content ?? []).map((c) => c.text ?? '') : [],
+    )
+    return { status: result.status, errorMessages }
+  }
+
+  it('forwards a valid polarity through dispatch to /v1/search', async () => {
+    const { searchBodies } = stubApi()
+    const server = createMcpHttpServer({ GETMNEMO_API_URL: 'https://api.example.com' })
+    await new Promise<void>((resolve) => server.listen(0, resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('server did not bind')
+
+    await callTool(address.port, { query: 'constraints', polarity: 'negative' })
+    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())))
+
+    expect(searchBodies).toHaveLength(1)
+    expect(searchBodies[0]).toMatchObject({ q: 'constraints', polarity: 'negative' })
+  })
+
+  it('rejects an out-of-enum polarity at the MCP boundary without calling the API', async () => {
+    const { searchBodies } = stubApi()
+    const server = createMcpHttpServer({ GETMNEMO_API_URL: 'https://api.example.com' })
+    await new Promise<void>((resolve) => server.listen(0, resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('server did not bind')
+
+    const result = await callTool(address.port, { query: 'constraints', polarity: 'bogus' })
+    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())))
+
+    expect(searchBodies).toHaveLength(0)
+    expect(result.errorMessages.join(' ')).toMatch(/polarity/i)
+  })
+})
