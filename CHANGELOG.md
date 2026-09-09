@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.0 — 2026-09-09
+
+API-parity release: closes the gaps between the public Memory API and the MCP
+surface that an agent actually hits. Every new request field is sent only when
+set, so older API servers (which reject unknown properties) are unaffected.
+
+### Added
+- **`polarity` on `memory_add` and `memory_update`.** Writer-declared polarity
+  beats the server's phrasing classifier — policy register ("No integrations
+  before FY27") reads neutral to a heuristic. Tag hard constraints
+  `"negative"` at write time so `memory_search { polarity: "negative" }` can
+  pull them later. This completes the constraint loop that 0.3.2 opened on the
+  read side.
+- **`memory_answer`** — the cited-answer pipeline (`POST /v1/answer`):
+  question in, synthesized answer + citations out, instead of raw chunks.
+  Citations default ON; `mode: "fast"` answers in ~1-2s, default `"full"`
+  runs the deep pipeline (with a 90s client budget instead of the default 30s).
+- **`document_add` + `job_status`** — async document ingestion
+  (`POST /v1/documents`, `GET /v1/jobs/{id}`): transcripts, pages, notes up to
+  500KB; extraction runs in the background, poll `job_status` until
+  `completed`. Re-ingesting the same `customId` updates instead of duplicating.
+- **`memory_restore`** — undo for `memory_delete` during the recovery window
+  (`POST /v1/memories/{id}/restore`). Listed for API-key sessions only: the
+  route is addressed by bare memory id with no container for the API to check
+  against an OAuth grant's allowed set, so the API denies hosted-OAuth MCP
+  principals outright.
+- **`searchMode`, `excludeIds`, `mode` on `memory_search`** — search documents
+  vs memories vs both, omit already-seen ids when paginating/deduplicating,
+  and opt into the `precise` retrieval pipeline.
+
 ## 0.3.2 — 2026-09-05
 
 ### Added

@@ -6,12 +6,16 @@ Model Context Protocol server for [Mnemo Memory](https://mnemohq.com) — expose
 
 | Tool | What it does |
 |---|---|
-| `memory_search` | Hybrid 7-strategy retrieval over the workspace memory store. |
-| `memory_add` | Store an atomic fact with optional metadata. |
+| `memory_search` | Hybrid 7-strategy retrieval over the workspace memory store. Filter by `polarity`, `searchMode` (memories/documents/both), exclude already-seen ids, or opt into `precise` mode. |
+| `memory_answer` | Cited-answer pipeline: question in, synthesized answer + citations out (`mode: "fast"` for ~1-2s). |
+| `memory_add` | Store an atomic fact with optional metadata; `polarity: "negative"` marks a hard constraint. |
 | `memory_get` | Fetch one memory by ID within the configured container. |
-| `memory_update` | Patch an existing memory's content or metadata. |
+| `memory_update` | Patch an existing memory's content, metadata, or polarity. |
 | `memory_delete` | Soft-delete a memory by ID so it leaves retrieval. |
+| `memory_restore` | Undo a soft delete during its recovery window (API-key sessions only). |
 | `memory_list` | Paginate through memories (cursor-based). |
+| `document_add` | Ingest a raw document (up to 500KB) into the async extraction lane; returns a `jobId`. |
+| `job_status` | Poll an ingestion job: queued / processing / completed / failed. |
 
 ### Personal-memory tools (0.3.0, Mnemo API v0.3.0)
 

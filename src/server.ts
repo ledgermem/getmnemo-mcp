@@ -29,7 +29,7 @@ import {
 } from './personal-tools.js'
 
 /** Advertised in the MCP initialize handshake; pinned to package.json by server.test.ts. */
-export const SERVER_VERSION = '0.3.2'
+export const SERVER_VERSION = '0.4.0'
 
 /**
  * Who authenticated this session. Hosted OAuth grants are rejected by the API
@@ -66,6 +66,19 @@ const SearchInput = z.object({
     .describe(
       'Restrict results to one polarity, with coverage: matching-polarity memories in scope are included even when the query never mentions them. Use "negative" to pull the standing hard constraints (things that must not be done) before acting on a plan or proposal.',
     ),
+  searchMode: z
+    .enum(['hybrid', 'memories', 'documents'])
+    .optional()
+    .describe('What to search: extracted memories, raw documents, or both (default hybrid).'),
+  excludeIds: z
+    .array(z.string().min(1).max(256))
+    .max(200)
+    .optional()
+    .describe('Memory ids to omit — e.g. results already shown, when paginating or deduplicating.'),
+  mode: z
+    .enum(['fast', 'precise'])
+    .optional()
+    .describe('Retrieval pipeline: "fast" (default) or "precise" (slower, better ranking).'),
 })
 
 // Cap metadata size so a malicious or buggy client cannot push a 10MB blob
@@ -85,9 +98,19 @@ const boundedMetadata = z
     { message: `metadata exceeds ${METADATA_MAX_SERIALIZED_BYTES} bytes when serialized` },
   )
 
+// Writer-declared polarity beats the server's phrasing classifier — policy
+// register ("No integrations before FY27") reads neutral to a heuristic.
+const POLARITY_WRITE_DESCRIPTION =
+  'Declare this memory\'s polarity explicitly. Use "negative" for hard constraints and prohibitions so polarity-filtered searches surface them; omit to let the server classify from phrasing.'
+const polarityField = z
+  .enum(['positive', 'negative', 'neutral'])
+  .optional()
+  .describe(POLARITY_WRITE_DESCRIPTION)
+
 const AddInput = z.object({
   content: z.string().min(1).max(10_000).describe('The fact or memory to store.'),
   memoryType: z.string().min(1).max(100).optional(),
+  polarity: polarityField,
   metadata: boundedMetadata
     .optional()
     .describe('Arbitrary JSON metadata (tags, source, etc.). Max 16KB serialized.'),
@@ -100,9 +123,54 @@ const UpdateInput = z.object({
   id: z.string().min(1).max(256).describe('Memory ID returned by memory_add or memory_search.'),
   content: z.string().min(1).max(10_000).optional(),
   memoryType: z.string().min(1).max(100).optional(),
+  polarity: polarityField,
   metadata: boundedMetadata.optional(),
   source: boundedMetadata.nullable().optional(),
   container: containerField,
+})
+
+const AnswerInput = z.object({
+  question: z.string().min(1).max(2000).describe('Natural-language question to answer from memory.'),
+  limit: z.number().int().min(1).max(50).optional().describe('Max snippets retrieved for synthesis.'),
+  mode: z
+    .enum(['fast', 'full'])
+    .optional()
+    .describe('"fast" = light reader (~1-2s). "full" (default) = deep synthesis pipeline.'),
+  includeCitations: z
+    .boolean()
+    .optional()
+    .describe('Return the supporting snippets and scores alongside the answer (default true).'),
+  referenceDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD')
+    .optional()
+    .describe('ISO date treated as "today" for temporal reasoning.'),
+  container: containerField,
+})
+
+const DocumentAddInput = z.object({
+  content: z.string().min(1).max(500_000).describe('Raw document text. Hard cap 500KB.'),
+  contentType: z
+    .string()
+    .min(1)
+    .max(100)
+    .describe('What the document is: "conversation", "note", "email", "webpage", ...'),
+  customId: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Stable external id — re-ingesting the same customId updates instead of duplicating.'),
+  metadata: boundedMetadata.optional(),
+  container: containerField,
+})
+
+const JobStatusInput = z.object({
+  jobId: z.string().min(1).max(256).describe('Ingestion job id returned by document_add.'),
+})
+
+const RestoreInput = z.object({
+  id: z.string().min(1).max(256).describe('Memory ID to restore (from a prior memory_delete).'),
 })
 
 const GetInput = z.object({
@@ -138,20 +206,61 @@ const MEMORY_TOOLS: Tool[] = [
           description:
             'Restrict results to one polarity, with coverage: matching-polarity memories in scope are included even when the query never mentions them. Use "negative" to pull the standing hard constraints (things that must not be done) before acting on a plan or proposal.',
         },
+        searchMode: {
+          type: 'string',
+          enum: ['hybrid', 'memories', 'documents'],
+          description: 'What to search: extracted memories, raw documents, or both (default hybrid).',
+        },
+        excludeIds: {
+          type: 'array',
+          items: { type: 'string' },
+          maxItems: 200,
+          description: 'Memory ids to omit — results already shown, when paginating or deduplicating.',
+        },
+        mode: {
+          type: 'string',
+          enum: ['fast', 'precise'],
+          description: 'Retrieval pipeline: "fast" (default) or "precise" (slower, better ranking).',
+        },
       },
       required: ['query'],
     },
   },
   {
+    name: 'memory_answer',
+    description:
+      'Ask a natural-language question and get a synthesized answer WITH citations from the memory store — the cited-answer pipeline, not raw chunks. Use memory_search when you want raw facts to reason over yourself; use memory_answer when you want the reading done for you. mode "fast" answers in ~1-2s; default "full" runs the deep pipeline.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'Natural-language question to answer from memory.' },
+        limit: { type: 'integer', minimum: 1, maximum: 50 },
+        mode: { type: 'string', enum: ['fast', 'full'] },
+        includeCitations: { type: 'boolean', default: true },
+        referenceDate: {
+          type: 'string',
+          description: 'YYYY-MM-DD treated as "today" for temporal reasoning.',
+        },
+        container: { type: 'string', description: CONTAINER_DESCRIPTION },
+      },
+      required: ['question'],
+    },
+  },
+  {
     name: 'memory_add',
     description:
-      'Store a new atomic fact in long-term memory. Use this whenever the user reveals durable preferences, facts about themselves, or context that should persist across sessions.',
+      'Store a new atomic fact in long-term memory. Use this whenever the user reveals durable preferences, facts about themselves, or context that should persist across sessions. Set polarity: "negative" when storing a hard constraint or prohibition.',
     inputSchema: {
       type: 'object',
       properties: {
         content: { type: 'string' },
         metadata: { type: 'object' },
         memoryType: { type: 'string' },
+        polarity: {
+          type: 'string',
+          enum: ['positive', 'negative', 'neutral'],
+          description: POLARITY_WRITE_DESCRIPTION,
+        },
         source: { type: 'object' },
         idempotencyKey: { type: 'string' },
         container: { type: 'string', description: CONTAINER_DESCRIPTION },
@@ -170,6 +279,11 @@ const MEMORY_TOOLS: Tool[] = [
         content: { type: 'string' },
         metadata: { type: 'object' },
         memoryType: { type: 'string' },
+        polarity: {
+          type: 'string',
+          enum: ['positive', 'negative', 'neutral'],
+          description: POLARITY_WRITE_DESCRIPTION,
+        },
         source: { type: 'object', nullable: true },
         container: { type: 'string', description: CONTAINER_DESCRIPTION },
       },
@@ -202,6 +316,18 @@ const MEMORY_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'memory_restore',
+    description:
+      'Restore a soft-deleted memory while its recovery window is open — the undo for memory_delete. Fails with 409 once the window has closed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Memory ID to restore.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
     name: 'memory_list',
     description:
       'List memories in the workspace with cursor pagination. Useful for review/debug; prefer memory_search for retrieval.',
@@ -214,15 +340,61 @@ const MEMORY_TOOLS: Tool[] = [
       },
     },
   },
+  {
+    name: 'document_add',
+    description:
+      'Ingest a raw source document (transcript, page, note, email — up to 500KB) into memory. Extraction runs asynchronously: the response includes a jobId to poll with job_status. Use memory_add instead for a single atomic fact.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: 'Raw document text. Hard cap 500KB.' },
+        contentType: {
+          type: 'string',
+          description: 'What the document is: "conversation", "note", "email", "webpage", ...',
+        },
+        customId: {
+          type: 'string',
+          description: 'Stable external id — re-ingesting the same customId updates instead of duplicating.',
+        },
+        metadata: { type: 'object' },
+        container: { type: 'string', description: CONTAINER_DESCRIPTION },
+      },
+      required: ['content', 'contentType'],
+    },
+  },
+  {
+    name: 'job_status',
+    description:
+      'Status of an ingestion job started by document_add: queued | processing | completed | failed (failed includes the error).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        jobId: { type: 'string', description: 'Job id returned by document_add.' },
+      },
+      required: ['jobId'],
+    },
+  },
 ]
+
+/**
+ * memory_restore is addressed by bare memory id with no container field for
+ * the API to validate against an OAuth grant's allowed set, so the API denies
+ * hosted-OAuth MCP principals outright (dashboard/API-key recovery only).
+ * Don't list what a session can never call.
+ */
+const API_KEY_ONLY_MEMORY_TOOLS = new Set(['memory_restore'])
 
 /** Tools visible to a session: every memory tool plus the personal tools its principal may call. */
 export function toolsForPrincipal(principal: ServerPrincipal): Tool[] {
+  const memory =
+    principal === 'oauth'
+      ? MEMORY_TOOLS.filter((t) => !API_KEY_ONLY_MEMORY_TOOLS.has(t.name))
+      : MEMORY_TOOLS
   const personal =
     principal === 'oauth'
       ? PERSONAL_TOOLS.filter((t) => isPersonalTool(t.name) && PERSONAL_TOOL_INFO[t.name].oauth)
       : PERSONAL_TOOLS
-  return [...MEMORY_TOOLS, ...personal]
+  return [...memory, ...personal]
 }
 
 export function createServer(cfg: ApiClientConfig, options: ServerOptions = {}): Server {
@@ -303,6 +475,20 @@ async function dispatch(
         limit: i.limit,
         container: i.container,
         polarity: i.polarity,
+        searchMode: i.searchMode,
+        excludeIds: i.excludeIds,
+        mode: i.mode,
+      })
+    }
+    case 'memory_answer': {
+      const i = AnswerInput.parse(raw)
+      return api.answerQuestion({
+        question: i.question,
+        limit: i.limit,
+        mode: i.mode,
+        includeCitations: i.includeCitations,
+        referenceDate: i.referenceDate,
+        container: i.container,
       })
     }
     case 'memory_add': {
@@ -310,6 +496,7 @@ async function dispatch(
       return api.addMemory({
         content: i.content,
         memoryType: i.memoryType,
+        polarity: i.polarity,
         metadata: i.metadata,
         source: i.source,
         idempotencyKey: i.idempotencyKey,
@@ -323,11 +510,30 @@ async function dispatch(
         {
           content: i.content,
           memoryType: i.memoryType,
+          polarity: i.polarity,
           metadata: i.metadata,
           source: i.source,
         },
         i.container,
       )
+    }
+    case 'memory_restore': {
+      const i = RestoreInput.parse(raw)
+      return api.restoreMemory(i.id)
+    }
+    case 'document_add': {
+      const i = DocumentAddInput.parse(raw)
+      return api.addDocument({
+        content: i.content,
+        contentType: i.contentType,
+        customId: i.customId,
+        metadata: i.metadata,
+        container: i.container,
+      })
+    }
+    case 'job_status': {
+      const i = JobStatusInput.parse(raw)
+      return api.getJob(i.jobId)
     }
     case 'memory_get': {
       const i = GetInput.parse(raw)

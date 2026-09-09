@@ -172,6 +172,10 @@ describe('hosted OAuth session establishment', () => {
     expect(result.names).toContain('memory_search')
     expect(result.names).toContain('memory_add')
     expect(result.names).toContain('memory_timeline')
+    // 0.4.0 core tools stay visible to OAuth sessions...
+    expect(result.names).toContain('memory_answer')
+    expect(result.names).toContain('document_add')
+    expect(result.names).toContain('job_status')
     for (const hidden of [
       'daily_brief',
       'people_list',
@@ -183,6 +187,9 @@ describe('hosted OAuth session establishment', () => {
       'meeting_brief',
       'meetings_upcoming',
       'memory_merge',
+      // ...but restore is denied to MCP OAuth principals by the API
+      // (bare-id route, no container to validate), so it is not listed.
+      'memory_restore',
     ]) expect(result.names, hidden).not.toContain(hidden)
   })
 
