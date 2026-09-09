@@ -428,7 +428,13 @@ export function createServer(cfg: ApiClientConfig, options: ServerOptions = {}):
     // a gated tool's name can send tools/call directly. Enforce the principal
     // gate on the CALL path — for job_status this filter is the only thing
     // between a container-scoped OAuth grant and workspace-wide job records.
-    if (principal === 'oauth' && API_KEY_ONLY_MEMORY_TOOLS.has(name)) {
+    // The oauth:false personal tools are also refused here for parity: the
+    // API already 403s them for MCP tokens, but hidden-yet-dispatchable is
+    // the exact gap this gate exists to close.
+    const oauthDenied =
+      API_KEY_ONLY_MEMORY_TOOLS.has(name) ||
+      (isPersonalTool(name) && !PERSONAL_TOOL_INFO[name].oauth)
+    if (principal === 'oauth' && oauthDenied) {
       return {
         isError: true,
         content: [

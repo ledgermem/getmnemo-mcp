@@ -249,10 +249,16 @@ describe('hosted OAuth session establishment', () => {
 
     const jobErrors = await callGated('job_status', { jobId: 'job-999' })
     const restoreErrors = await callGated('memory_restore', { id: '3f1d1e1c-0000-4000-8000-000000000000' })
+    // oauth:false personal tools get the same call-path refusal (the API
+    // would 403 them anyway; this proves the client never even asks).
+    const mergeErrors = await callGated('memory_merge', {
+      memoryIds: ['3f1d1e1c-0000-4000-8000-000000000001', '3f1d1e1c-0000-4000-8000-000000000002'],
+    })
     await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()))
 
     expect(jobErrors.join(' ')).toContain('not available to OAuth sessions')
     expect(restoreErrors.join(' ')).toContain('not available to OAuth sessions')
+    expect(mergeErrors.join(' ')).toContain('not available to OAuth sessions')
     expect(gatedRouteCalls).toEqual([])
   })
 

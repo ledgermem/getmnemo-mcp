@@ -29,8 +29,10 @@ set, so older API servers (which reject unknown properties) are unaffected.
 Bare-id routes are API-key sessions only: `memory_restore` and `job_status`
 carry no container field for the API to check against an OAuth grant's
 allowed set (the API denies MCP principals on restore outright; the jobs
-route is workspace-keyed), so neither tool is listed to hosted-OAuth
-sessions.
+route is workspace-keyed). Neither tool is listed to hosted-OAuth sessions,
+and — because listing is discovery, not authorization — a direct `tools/call`
+to them (or to any API-key-only personal tool) from an OAuth session is
+refused before any API request is made.
 - **`searchMode`, `excludeIds`, `mode` on `memory_search`** — search documents
   vs memories vs both, omit already-seen ids when paginating/deduplicating,
   and opt into the `precise` retrieval pipeline.
