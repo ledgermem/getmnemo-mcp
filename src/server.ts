@@ -135,7 +135,9 @@ const AnswerInput = z.object({
   mode: z
     .enum(['fast', 'full'])
     .optional()
-    .describe('"fast" = light reader (~1-2s). "full" (default) = deep synthesis pipeline.'),
+    .describe(
+      '"fast" = light reader (~1-2s). "full" (default) = deep synthesis pipeline. (Values differ from memory_search\'s mode.)',
+    ),
   includeCitations: z
     .boolean()
     .optional()
@@ -149,7 +151,9 @@ const AnswerInput = z.object({
 })
 
 const DocumentAddInput = z.object({
-  content: z.string().min(1).max(500_000).describe('Raw document text. Hard cap 500KB.'),
+  // Character cap mirroring the API DTO's @MaxLength(500_000); both count
+  // code units, not bytes, so say "characters" rather than overclaim "KB".
+  content: z.string().min(1).max(500_000).describe('Raw document text. Hard cap 500,000 characters.'),
   contentType: z
     .string()
     .min(1)
@@ -235,7 +239,11 @@ const MEMORY_TOOLS: Tool[] = [
       properties: {
         question: { type: 'string', description: 'Natural-language question to answer from memory.' },
         limit: { type: 'integer', minimum: 1, maximum: 50 },
-        mode: { type: 'string', enum: ['fast', 'full'] },
+        mode: {
+          type: 'string',
+          enum: ['fast', 'full'],
+          description: '"fast" ~1-2s; "full" (default) deep pipeline. Values differ from memory_search\'s mode.',
+        },
         includeCitations: { type: 'boolean', default: true },
         referenceDate: {
           type: 'string',
@@ -343,11 +351,11 @@ const MEMORY_TOOLS: Tool[] = [
   {
     name: 'document_add',
     description:
-      'Ingest a raw source document (transcript, page, note, email — up to 500KB) into memory. Extraction runs asynchronously: the response includes a jobId to poll with job_status. Use memory_add instead for a single atomic fact.',
+      'Ingest a raw source document (transcript, page, note, email — up to 500,000 characters) into memory. Extraction runs asynchronously: the response includes a jobId (poll it with job_status where available; the job completes on its own either way). Use memory_add instead for a single atomic fact.',
     inputSchema: {
       type: 'object',
       properties: {
-        content: { type: 'string', description: 'Raw document text. Hard cap 500KB.' },
+        content: { type: 'string', description: 'Raw document text. Hard cap 500,000 characters.' },
         contentType: {
           type: 'string',
           description: 'What the document is: "conversation", "note", "email", "webpage", ...',
@@ -377,12 +385,15 @@ const MEMORY_TOOLS: Tool[] = [
 ]
 
 /**
- * memory_restore is addressed by bare memory id with no container field for
- * the API to validate against an OAuth grant's allowed set, so the API denies
- * hosted-OAuth MCP principals outright (dashboard/API-key recovery only).
- * Don't list what a session can never call.
+ * Bare-id routes with no container field for the API to validate against an
+ * OAuth grant's allowed set. memory_restore is denied to hosted-OAuth MCP
+ * principals by the API outright; GET /v1/jobs/{id} is workspace-keyed with
+ * no container check, so listing job_status to a container-scoped OAuth
+ * grant would let it read job records (documentId, status, error) from
+ * containers outside the grant. API-key sessions hold workspace-wide
+ * authority already, so neither gate loses them anything.
  */
-const API_KEY_ONLY_MEMORY_TOOLS = new Set(['memory_restore'])
+const API_KEY_ONLY_MEMORY_TOOLS = new Set(['memory_restore', 'job_status'])
 
 /** Tools visible to a session: every memory tool plus the personal tools its principal may call. */
 export function toolsForPrincipal(principal: ServerPrincipal): Tool[] {

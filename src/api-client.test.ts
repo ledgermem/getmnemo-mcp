@@ -342,16 +342,16 @@ describe('0.4.0 endpoints', () => {
     return { client, fetchImpl }
   }
 
-  it('answerQuestion posts q with citations on by default and the tenant boundary', async () => {
+  it('answerQuestion posts q with the tenant boundary and NO unset optionals (server defaults citations on)', async () => {
     const { client, fetchImpl } = endpointClient({ answer: '42' })
     await client.answerQuestion({ question: 'What did Alice ask for?' })
     const [url, init] = fetchImpl.mock.calls[0] ?? []
     expect(url).toBe('https://api.example.com/v1/answer')
-    expect(JSON.parse(String(init?.body))).toMatchObject({
-      q: 'What did Alice ask for?',
-      containerTag: 'user:test',
-      includeCitations: true,
-    })
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    expect(body).toMatchObject({ q: 'What did Alice ask for?', containerTag: 'user:test' })
+    for (const key of ['includeCitations', 'mode', 'referenceDate', 'limit']) {
+      expect(body, key).not.toHaveProperty(key)
+    }
   })
 
   it('answerQuestion only sends optional fields when set', async () => {
@@ -361,6 +361,7 @@ describe('0.4.0 endpoints', () => {
     const first = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body as string)) as Record<string, unknown>
     const second = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body as string)) as Record<string, unknown>
     expect(first).toMatchObject({ mode: 'fast', referenceDate: '2026-04-16', limit: 5 })
+    expect(first).not.toHaveProperty('includeCitations')
     expect(second).toMatchObject({ includeCitations: false })
     for (const key of ['mode', 'referenceDate', 'limit']) expect(second, key).not.toHaveProperty(key)
   })
@@ -376,6 +377,13 @@ describe('0.4.0 endpoints', () => {
       customId: 'thread-42',
       containerTag: 'user:test',
     })
+  })
+
+  it('addDocument omits customId and metadata when unset (older servers 400 unknown fields)', async () => {
+    const { client, fetchImpl } = endpointClient({ documentId: 'doc-1', jobId: 'job-1', status: 'queued' })
+    await client.addDocument({ content: 'transcript text', contentType: 'conversation' })
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body as string)) as Record<string, unknown>
+    for (const key of ['customId', 'metadata']) expect(body, key).not.toHaveProperty(key)
   })
 
   it('getJob and restoreMemory hit their id-addressed routes', async () => {

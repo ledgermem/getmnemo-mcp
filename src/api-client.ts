@@ -314,7 +314,7 @@ export class MnemoApiClient {
 
   /**
    * POST /v1/answer — the cited-answer pipeline: hybrid retrieval + synthesis
-   * over the effective container. Citations are on by default here (the whole
+   * over the effective container. Citations default ON server-side (the whole
    * point of the tool); `mode: 'fast'` trades depth for ~1-2s latency. The
    * full pipeline can run well past the default request timeout, so answer
    * calls get their own longer budget.
@@ -333,7 +333,10 @@ export class MnemoApiClient {
       {
         q: input.question,
         ...this.containerBody(input.container),
-        includeCitations: input.includeCitations ?? true,
+        // The controller itself defaults `dto.includeCitations ?? true`, so
+        // omitting the key keeps citations ON while preserving the invariant
+        // that unset fields never reach older servers.
+        ...(input.includeCitations !== undefined ? { includeCitations: input.includeCitations } : {}),
         ...(input.limit !== undefined ? { limit: input.limit } : {}),
         ...(input.mode !== undefined ? { mode: input.mode } : {}),
         ...(input.referenceDate !== undefined ? { referenceDate: input.referenceDate } : {}),
@@ -346,9 +349,10 @@ export class MnemoApiClient {
 
   /**
    * POST /v1/documents — async ingestion lane for raw source material
-   * (transcripts, pages, notes; hard cap 500KB). Returns the stored document
-   * and the queued job; poll getJob() until it completes. Re-uploading the
-   * same customId updates the existing document instead of duplicating it.
+   * (transcripts, pages, notes; hard cap 500,000 characters). Returns the
+   * stored document and the queued job; poll getJob() until it completes.
+   * Re-uploading the same customId updates the existing document instead of
+   * duplicating it.
    */
   async addDocument(input: {
     content: string

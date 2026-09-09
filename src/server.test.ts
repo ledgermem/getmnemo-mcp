@@ -27,11 +27,12 @@ describe('toolsForPrincipal', () => {
     ]) expect(names, tool).toContain(tool)
   })
 
-  it('hides memory_restore from OAuth sessions (API denies MCP principals on the bare-id route)', () => {
+  it('hides the bare-id routes from OAuth sessions (no container for the API to check against the grant)', () => {
     const names = toolsForPrincipal('oauth').map((t) => t.name)
     expect(names).not.toContain('memory_restore')
-    // The rest of the 0.4.0 surface stays visible.
-    for (const tool of ['memory_answer', 'document_add', 'job_status']) {
+    expect(names).not.toContain('job_status')
+    // The container-validated 0.4.0 surface stays visible.
+    for (const tool of ['memory_answer', 'document_add']) {
       expect(names, tool).toContain(tool)
     }
   })

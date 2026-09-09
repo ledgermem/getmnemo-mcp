@@ -15,17 +15,22 @@ set, so older API servers (which reject unknown properties) are unaffected.
   read side.
 - **`memory_answer`** — the cited-answer pipeline (`POST /v1/answer`):
   question in, synthesized answer + citations out, instead of raw chunks.
-  Citations default ON; `mode: "fast"` answers in ~1-2s, default `"full"`
-  runs the deep pipeline (with a 90s client budget instead of the default 30s).
+  Citations default ON (server-side); `mode: "fast"` answers in ~1-2s, default
+  `"full"` runs the deep pipeline (with a 90s client budget instead of the
+  default 30s).
 - **`document_add` + `job_status`** — async document ingestion
   (`POST /v1/documents`, `GET /v1/jobs/{id}`): transcripts, pages, notes up to
-  500KB; extraction runs in the background, poll `job_status` until
-  `completed`. Re-ingesting the same `customId` updates instead of duplicating.
+  500,000 characters; extraction runs in the background, poll `job_status`
+  until `completed`. Re-ingesting the same `customId` updates instead of
+  duplicating.
 - **`memory_restore`** — undo for `memory_delete` during the recovery window
-  (`POST /v1/memories/{id}/restore`). Listed for API-key sessions only: the
-  route is addressed by bare memory id with no container for the API to check
-  against an OAuth grant's allowed set, so the API denies hosted-OAuth MCP
-  principals outright.
+  (`POST /v1/memories/{id}/restore`).
+
+Bare-id routes are API-key sessions only: `memory_restore` and `job_status`
+carry no container field for the API to check against an OAuth grant's
+allowed set (the API denies MCP principals on restore outright; the jobs
+route is workspace-keyed), so neither tool is listed to hosted-OAuth
+sessions.
 - **`searchMode`, `excludeIds`, `mode` on `memory_search`** — search documents
   vs memories vs both, omit already-seen ids when paginating/deduplicating,
   and opt into the `precise` retrieval pipeline.

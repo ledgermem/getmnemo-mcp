@@ -14,8 +14,8 @@ Model Context Protocol server for [Mnemo Memory](https://mnemohq.com) — expose
 | `memory_delete` | Soft-delete a memory by ID so it leaves retrieval. |
 | `memory_restore` | Undo a soft delete during its recovery window (API-key sessions only). |
 | `memory_list` | Paginate through memories (cursor-based). |
-| `document_add` | Ingest a raw document (up to 500KB) into the async extraction lane; returns a `jobId`. |
-| `job_status` | Poll an ingestion job: queued / processing / completed / failed. |
+| `document_add` | Ingest a raw document (up to 500,000 characters) into the async extraction lane; returns a `jobId`. |
+| `job_status` | Poll an ingestion job: queued / processing / completed / failed (API-key sessions only). |
 
 ### Personal-memory tools (0.3.0, Mnemo API v0.3.0)
 
