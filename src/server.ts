@@ -78,7 +78,9 @@ const SearchInput = z.object({
   mode: z
     .enum(['fast', 'precise'])
     .optional()
-    .describe('Retrieval pipeline: "fast" (default) or "precise" (slower, better ranking).'),
+    .describe(
+      'Retrieval pipeline: "fast" (default) or "precise" (slower, better ranking). (Values differ from memory_answer\'s mode.)',
+    ),
 })
 
 // Cap metadata size so a malicious or buggy client cannot push a 10MB blob
@@ -224,7 +226,8 @@ const MEMORY_TOOLS: Tool[] = [
         mode: {
           type: 'string',
           enum: ['fast', 'precise'],
-          description: 'Retrieval pipeline: "fast" (default) or "precise" (slower, better ranking).',
+          description:
+            'Retrieval pipeline: "fast" (default) or "precise" (slower, better ranking). Values differ from memory_answer\'s mode.',
         },
       },
       required: ['query'],
@@ -410,7 +413,8 @@ export function toolsForPrincipal(principal: ServerPrincipal): Tool[] {
 
 export function createServer(cfg: ApiClientConfig, options: ServerOptions = {}): Server {
   const api = new MnemoApiClient(cfg)
-  const tools = toolsForPrincipal(options.principal ?? 'api_key')
+  const principal = options.principal ?? 'api_key'
+  const tools = toolsForPrincipal(principal)
   const server = new Server(
     { name: 'getmnemo', version: SERVER_VERSION },
     { capabilities: { tools: {} } },
@@ -420,6 +424,21 @@ export function createServer(cfg: ApiClientConfig, options: ServerOptions = {}):
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params
+    // tools/list is discovery, not authorization: a client that already knows
+    // a gated tool's name can send tools/call directly. Enforce the principal
+    // gate on the CALL path — for job_status this filter is the only thing
+    // between a container-scoped OAuth grant and workspace-wide job records.
+    if (principal === 'oauth' && API_KEY_ONLY_MEMORY_TOOLS.has(name)) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Tool '${name}' is not available to OAuth sessions — connect with an API key to use it.`,
+          },
+        ],
+      }
+    }
     try {
       const result = await dispatch(api, name, args ?? {})
       return {

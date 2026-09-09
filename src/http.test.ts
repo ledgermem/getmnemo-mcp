@@ -193,6 +193,69 @@ describe('hosted OAuth session establishment', () => {
     ]) expect(result.names, hidden).not.toContain(hidden)
   })
 
+  it('refuses a direct tools/call to a gated tool from an OAuth session (listing is not authorization)', async () => {
+    // Route-aware stub: introspect resolves the grant; any call that reaches
+    // the jobs/restore routes is recorded — the gate must keep this at zero.
+    const gatedRouteCalls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL | Request) => {
+        const href = String(url)
+        if (href.includes('/v1/jobs/') || href.includes('/restore')) {
+          gatedRouteCalls.push(href)
+          return new Response(JSON.stringify({ id: 'job-999', status: 'completed' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Response(
+          JSON.stringify({ tenantId: 'workspace', containerTags: ['user:jane'] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }),
+    )
+    const server = createMcpHttpServer({ GETMNEMO_API_URL: 'https://api.example.com' })
+    await new Promise<void>((resolve) => server.listen(0, resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('server did not bind')
+    const port = address.port
+
+    async function callGated(name: string, args: Record<string, unknown>): Promise<string[]> {
+      const result = await call(port, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer header.payload.signature',
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 7,
+          method: 'tools/call',
+          params: { name, arguments: args },
+        }),
+      })
+      return result.body
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map(
+          (line) =>
+            JSON.parse(line.slice(5).trim()) as {
+              result?: { isError?: boolean; content?: Array<{ text?: string }> }
+            },
+        )
+        .flatMap((p) => (p.result?.isError ? (p.result.content ?? []).map((c) => c.text ?? '') : []))
+    }
+
+    const jobErrors = await callGated('job_status', { jobId: 'job-999' })
+    const restoreErrors = await callGated('memory_restore', { id: '3f1d1e1c-0000-4000-8000-000000000000' })
+    await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()))
+
+    expect(jobErrors.join(' ')).toContain('not available to OAuth sessions')
+    expect(restoreErrors.join(' ')).toContain('not available to OAuth sessions')
+    expect(gatedRouteCalls).toEqual([])
+  })
+
   it('still rejects an OAuth grant with no workspace scope', async () => {
     stubIntrospect({ containerTags: [] })
     const server = createMcpHttpServer({ GETMNEMO_API_URL: 'https://api.example.com' })
