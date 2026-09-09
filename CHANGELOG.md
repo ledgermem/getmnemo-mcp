@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.4.0 — 2026-09-09
+
+API-parity release: closes the gaps between the public Memory API and the MCP
+surface that an agent actually hits. Every new request field is sent only when
+set, so older API servers (which reject unknown properties) are unaffected.
+
+### Added
+- **`polarity` on `memory_add` and `memory_update`.** Writer-declared polarity
+  beats the server's phrasing classifier — policy register ("No integrations
+  before FY27") reads neutral to a heuristic. Tag hard constraints
+  `"negative"` at write time so `memory_search { polarity: "negative" }` can
+  pull them later. This completes the constraint loop that 0.3.2 opened on the
+  read side.
+- **`memory_answer`** — the cited-answer pipeline (`POST /v1/answer`):
+  question in, synthesized answer + citations out, instead of raw chunks.
+  Citations default ON (server-side); `mode: "fast"` answers in ~1-2s, default
+  `"full"` runs the deep pipeline (with a 90s client budget instead of the
+  default 30s).
+- **`document_add` + `job_status`** — async document ingestion
+  (`POST /v1/documents`, `GET /v1/jobs/{id}`): transcripts, pages, notes up to
+  500,000 characters; extraction runs in the background, poll `job_status`
+  until `completed`. Re-ingesting the same `customId` updates instead of
+  duplicating.
+- **`memory_restore`** — undo for `memory_delete` during the recovery window
+  (`POST /v1/memories/{id}/restore`).
+
+Bare-id routes are API-key sessions only: `memory_restore` and `job_status`
+carry no container field for the API to check against an OAuth grant's
+allowed set (the API denies MCP principals on restore outright; the jobs
+route is workspace-keyed). Neither tool is listed to hosted-OAuth sessions,
+and — because listing is discovery, not authorization — a direct `tools/call`
+to them (or to any API-key-only personal tool) from an OAuth session is
+refused before any API request is made.
+- **`searchMode`, `excludeIds`, `mode` on `memory_search`** — search documents
+  vs memories vs both, omit already-seen ids when paginating/deduplicating,
+  and opt into the `precise` retrieval pipeline.
+
 ## 0.3.2 — 2026-09-05
 
 ### Added

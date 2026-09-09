@@ -249,3 +249,149 @@ describe('search polarity', () => {
     expect(JSON.parse(String(init?.body))).not.toHaveProperty('polarity')
   })
 })
+
+describe('0.4.0 search params', () => {
+  function paramsClient() {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response({ results: [] }))
+    const client = new MnemoApiClient({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'prfly_live_test',
+      container: { containerTag: 'user:test' },
+      fetch: fetchImpl,
+    })
+    return { client, fetchImpl }
+  }
+
+  it('forwards searchMode, excludeIds, and mode when set', async () => {
+    const { client, fetchImpl } = paramsClient()
+    await client.search({
+      query: 'vendors',
+      searchMode: 'documents',
+      excludeIds: ['mem-1', 'mem-2'],
+      mode: 'precise',
+    })
+    const [, init] = fetchImpl.mock.calls[0] ?? []
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      q: 'vendors',
+      searchMode: 'documents',
+      excludeIds: ['mem-1', 'mem-2'],
+      mode: 'precise',
+    })
+  })
+
+  it('omits every 0.4.0 param when unset (older servers 400 unknown fields)', async () => {
+    const { client, fetchImpl } = paramsClient()
+    await client.search({ query: 'vendors' })
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body as string)) as Record<string, unknown>
+    for (const key of ['searchMode', 'excludeIds', 'mode']) {
+      expect(body, key).not.toHaveProperty(key)
+    }
+  })
+})
+
+describe('polarity on writes', () => {
+  function writeClient(body: unknown = { items: [] }) {
+    // Fresh Response per call — a shared one throws "Body is unusable" on reuse.
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => response(body))
+    const client = new MnemoApiClient({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'prfly_live_test',
+      container: { containerTag: 'user:test' },
+      fetch: fetchImpl,
+    })
+    return { client, fetchImpl }
+  }
+
+  it('addMemory sends an explicit polarity inside the item', async () => {
+    const { client, fetchImpl } = writeClient()
+    await client.addMemory({ content: 'No integrations before FY27.', polarity: 'negative' })
+    const [, init] = fetchImpl.mock.calls[0] ?? []
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      items: [{ content: 'No integrations before FY27.', polarity: 'negative' }],
+    })
+  })
+
+  it('addMemory omits polarity when unset', async () => {
+    const { client, fetchImpl } = writeClient()
+    await client.addMemory({ content: 'Prefers dark mode.' })
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body as string)) as { items: Record<string, unknown>[] }
+    expect(body.items[0]).not.toHaveProperty('polarity')
+  })
+
+  it('updateMemory serializes polarity when set and drops it when undefined', async () => {
+    const { client, fetchImpl } = writeClient({ id: 'memory-1' })
+    await client.updateMemory('memory-1', { polarity: 'negative' })
+    await client.updateMemory('memory-1', { content: 'edited' })
+    const first = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body as string)) as Record<string, unknown>
+    const second = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body as string)) as Record<string, unknown>
+    expect(first).toMatchObject({ polarity: 'negative' })
+    expect(second).not.toHaveProperty('polarity')
+  })
+})
+
+describe('0.4.0 endpoints', () => {
+  function endpointClient(body: unknown) {
+    // Fresh Response per call — a shared one throws "Body is unusable" on reuse.
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => response(body))
+    const client = new MnemoApiClient({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'prfly_live_test',
+      container: { containerTag: 'user:test' },
+      fetch: fetchImpl,
+    })
+    return { client, fetchImpl }
+  }
+
+  it('answerQuestion posts q with the tenant boundary and NO unset optionals (server defaults citations on)', async () => {
+    const { client, fetchImpl } = endpointClient({ answer: '42' })
+    await client.answerQuestion({ question: 'What did Alice ask for?' })
+    const [url, init] = fetchImpl.mock.calls[0] ?? []
+    expect(url).toBe('https://api.example.com/v1/answer')
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    expect(body).toMatchObject({ q: 'What did Alice ask for?', containerTag: 'user:test' })
+    for (const key of ['includeCitations', 'mode', 'referenceDate', 'limit']) {
+      expect(body, key).not.toHaveProperty(key)
+    }
+  })
+
+  it('answerQuestion only sends optional fields when set', async () => {
+    const { client, fetchImpl } = endpointClient({ answer: '42' })
+    await client.answerQuestion({ question: 'q', mode: 'fast', referenceDate: '2026-04-16', limit: 5 })
+    await client.answerQuestion({ question: 'q', includeCitations: false })
+    const first = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body as string)) as Record<string, unknown>
+    const second = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body as string)) as Record<string, unknown>
+    expect(first).toMatchObject({ mode: 'fast', referenceDate: '2026-04-16', limit: 5 })
+    expect(first).not.toHaveProperty('includeCitations')
+    expect(second).toMatchObject({ includeCitations: false })
+    for (const key of ['mode', 'referenceDate', 'limit']) expect(second, key).not.toHaveProperty(key)
+  })
+
+  it('addDocument posts content/contentType with the tenant boundary and optional customId', async () => {
+    const { client, fetchImpl } = endpointClient({ documentId: 'doc-1', jobId: 'job-1', status: 'queued' })
+    await client.addDocument({ content: 'transcript text', contentType: 'conversation', customId: 'thread-42' })
+    const [url, init] = fetchImpl.mock.calls[0] ?? []
+    expect(url).toBe('https://api.example.com/v1/documents')
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      content: 'transcript text',
+      contentType: 'conversation',
+      customId: 'thread-42',
+      containerTag: 'user:test',
+    })
+  })
+
+  it('addDocument omits customId and metadata when unset (older servers 400 unknown fields)', async () => {
+    const { client, fetchImpl } = endpointClient({ documentId: 'doc-1', jobId: 'job-1', status: 'queued' })
+    await client.addDocument({ content: 'transcript text', contentType: 'conversation' })
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body as string)) as Record<string, unknown>
+    for (const key of ['customId', 'metadata']) expect(body, key).not.toHaveProperty(key)
+  })
+
+  it('getJob and restoreMemory hit their id-addressed routes', async () => {
+    const { client, fetchImpl } = endpointClient({ id: 'x', status: 'completed', restored: true })
+    await client.getJob('job-1')
+    await client.restoreMemory('memory-1')
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://api.example.com/v1/jobs/job-1')
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('https://api.example.com/v1/memories/memory-1/restore')
+    expect(fetchImpl.mock.calls[1]?.[1]?.method).toBe('POST')
+  })
+})

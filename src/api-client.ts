@@ -41,6 +41,13 @@ import type {
 /** Header the API reads to target a specific allowed container per call. */
 export const CONTAINER_HEADER = 'x-mnemo-container'
 
+/**
+ * Per-request budget for /v1/answer. The full synthesis pipeline (retrieval +
+ * two-stage reader) can legitimately outlive the default 30s request timeout,
+ * so answer calls get their own ceiling instead of failing as aborts.
+ */
+export const ANSWER_TIMEOUT_MS = 90_000
+
 // confirmed against prod 2026-06-16. Shapes verified from real /v1 payloads.
 export type Memory = {
   id: string
@@ -106,6 +113,54 @@ export type AddResponse = {
   scope?: unknown
   items: Memory[]
 }
+
+// POST /v1/answer result (AnswerResult in the API). Citations only present
+// when includeCitations was requested.
+export type AnswerCitation = {
+  type?: string
+  score?: number
+  content?: string
+  memoryId?: string
+  documentId?: string
+  sessionDate?: string
+}
+
+export type AnswerResponse = {
+  answer: string
+  abstained?: boolean
+  queryIntent?: string
+  isAggregation?: boolean
+  fallbackTriggered?: boolean
+  retryTriggered?: boolean
+  citations?: AnswerCitation[]
+  stats?: Record<string, unknown>
+}
+
+// GET /v1/jobs/{jobId} — ingestion job record (JobRecordDto).
+export type JobRecord = {
+  id: string
+  status: string
+  documentId?: string
+  retryable?: boolean
+  attempts?: { current: number; max: number }
+  error?: { code: string | null; message: string | null } | null
+  startedAt?: string | null
+  finishedAt?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
+// POST /v1/documents — stored document plus the queued ingestion job.
+export type CreateDocumentResponse = {
+  documentId: string
+  jobId: string
+  status: string
+  reused?: boolean
+  document?: Record<string, unknown>
+  job?: JobRecord
+}
+
+export type Polarity = 'positive' | 'negative' | 'neutral'
 
 export type MemorySource = Record<string, unknown>
 
@@ -233,11 +288,14 @@ export class MnemoApiClient {
     query: string
     limit?: number
     container?: string
-    polarity?: 'positive' | 'negative' | 'neutral'
+    polarity?: Polarity
+    searchMode?: 'hybrid' | 'memories' | 'documents'
+    excludeIds?: string[]
+    mode?: 'fast' | 'precise'
   }): Promise<SearchResponse> {
     // SearchRequestDto: field is `q` (NOT `query`); containerTag|scope required.
-    // polarity is only sent when set — the API 400s unknown properties, so an
-    // absent field must stay absent for older servers.
+    // Optional fields are only sent when set — the API 400s unknown properties,
+    // so an absent field must stay absent for older servers.
     return this.request<SearchResponse>(
       'POST',
       '/v1/search',
@@ -246,14 +304,98 @@ export class MnemoApiClient {
         ...this.containerBody(input.container),
         ...(input.limit !== undefined ? { limit: input.limit } : {}),
         ...(input.polarity !== undefined ? { polarity: input.polarity } : {}),
+        ...(input.searchMode !== undefined ? { searchMode: input.searchMode } : {}),
+        ...(input.excludeIds !== undefined ? { excludeIds: input.excludeIds } : {}),
+        ...(input.mode !== undefined ? { mode: input.mode } : {}),
       },
       input.container,
     )
   }
 
+  /**
+   * POST /v1/answer — the cited-answer pipeline: hybrid retrieval + synthesis
+   * over the effective container. Citations default ON server-side (the whole
+   * point of the tool); `mode: 'fast'` trades depth for ~1-2s latency. The
+   * full pipeline can run well past the default request timeout, so answer
+   * calls get their own longer budget.
+   */
+  async answerQuestion(input: {
+    question: string
+    limit?: number
+    mode?: 'fast' | 'full'
+    includeCitations?: boolean
+    referenceDate?: string
+    container?: string
+  }): Promise<AnswerResponse> {
+    return this.request<AnswerResponse>(
+      'POST',
+      '/v1/answer',
+      {
+        q: input.question,
+        ...this.containerBody(input.container),
+        // The controller itself defaults `dto.includeCitations ?? true`, so
+        // omitting the key keeps citations ON while preserving the invariant
+        // that unset fields never reach older servers.
+        ...(input.includeCitations !== undefined ? { includeCitations: input.includeCitations } : {}),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        ...(input.mode !== undefined ? { mode: input.mode } : {}),
+        ...(input.referenceDate !== undefined ? { referenceDate: input.referenceDate } : {}),
+      },
+      input.container,
+      // Respect an operator-configured budget when it is already longer.
+      Math.max(ANSWER_TIMEOUT_MS, this.timeoutMs),
+    )
+  }
+
+  /**
+   * POST /v1/documents — async ingestion lane for raw source material
+   * (transcripts, pages, notes; hard cap 500,000 characters). Returns the
+   * stored document and the queued job; poll getJob() until it completes.
+   * Re-uploading the same customId updates the existing document instead of
+   * duplicating it.
+   */
+  async addDocument(input: {
+    content: string
+    contentType: string
+    customId?: string
+    metadata?: Record<string, unknown>
+    container?: string
+  }): Promise<CreateDocumentResponse> {
+    return this.request<CreateDocumentResponse>(
+      'POST',
+      '/v1/documents',
+      {
+        content: input.content,
+        contentType: input.contentType,
+        ...this.containerBody(input.container),
+        ...(input.customId !== undefined ? { customId: input.customId } : {}),
+        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+      },
+      input.container,
+    )
+  }
+
+  /** GET /v1/jobs/{jobId} — status of one ingestion job (workspace-keyed). */
+  async getJob(jobId: string): Promise<JobRecord> {
+    return this.request<JobRecord>('GET', `/v1/jobs/${encodeURIComponent(jobId)}`)
+  }
+
+  /**
+   * POST /v1/memories/{memoryId}/restore — undo a recoverable delete while
+   * its window is open. Addressed by bare memory id (no container field), so
+   * the API rejects hosted-OAuth MCP principals outright; API-key connections
+   * only. 409 when the receipt is no longer restorable.
+   */
+  async restoreMemory(
+    memoryId: string,
+  ): Promise<{ id: string; restored: true; receiptId?: string; restoredAt?: string }> {
+    return this.request('POST', `/v1/memories/${encodeURIComponent(memoryId)}/restore`)
+  }
+
   async addMemory(input: {
     content: string
     memoryType?: string
+    polarity?: Polarity
     metadata?: Record<string, unknown>
     source?: MemorySource
     idempotencyKey?: string
@@ -261,6 +403,9 @@ export class MnemoApiClient {
   }): Promise<AddResponse> {
     // CreateMemoriesDto: content wrapped in `items[]`; containerTag|scope
     // required at runtime (DTO marks only `items`, but prod 400s without it).
+    // `polarity` declares the writer's intent (a hard constraint is
+    // `negative`) and beats the server's phrasing classifier; only sent when
+    // set so older servers never see the key.
     return this.request<AddResponse>(
       'POST',
       '/v1/memories',
@@ -269,6 +414,7 @@ export class MnemoApiClient {
           {
             content: input.content,
             ...(input.memoryType !== undefined ? { memoryType: input.memoryType } : {}),
+            ...(input.polarity !== undefined ? { polarity: input.polarity } : {}),
             ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
             ...(input.source !== undefined ? { source: input.source } : {}),
             ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
@@ -285,13 +431,17 @@ export class MnemoApiClient {
     input: {
       content?: string
       memoryType?: string
+      polarity?: Polarity
       metadata?: Record<string, unknown> | null
       source?: MemorySource | null
     },
     container?: string,
   ): Promise<Memory> {
-    // UpdateMemoryDto: {content?, memoryType?, metadata?, source?} — all
-    // optional. Direct access is additionally pinned by the effective scope
+    // UpdateMemoryDto: {content?, memoryType?, polarity?, metadata?, source?}
+    // — all optional; JSON.stringify drops the undefined ones, so older
+    // servers never see keys the caller did not set. An explicit `polarity`
+    // wins over re-classification of edited content. Direct access is
+    // additionally pinned by the effective scope
     // query so same-workspace containers cannot cross read/write boundaries.
     return this.request<Memory>(
       'PATCH',
@@ -466,9 +616,10 @@ export class MnemoApiClient {
     path: string,
     body?: unknown,
     containerHeader?: string,
+    timeoutMs?: number,
   ): Promise<T> {
     const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs)
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs ?? this.timeoutMs)
     try {
       // Per-call container targeting: when present, the API validates this
       // header against the connection's allowed set. When absent, no header
