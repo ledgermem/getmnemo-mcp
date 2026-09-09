@@ -24,6 +24,12 @@ jobs:
           MNEMO_WORKSPACE_ID: ${{ secrets.MNEMO_WORKSPACE_ID }}
           MNEMO_TEST_CONTAINER: ${{ secrets.MNEMO_TEST_CONTAINER }}
 
+  # Auth is npm Trusted Publishing (OIDC): the registry trusts this repo's
+  # publish.yml via the runner's id-token — no NPM_TOKEN secret, nothing to
+  # expire. The OIDC code path only exists in npm >= 11.5.1 (node 22 bundles
+  # npm 10), hence the pinned upgrade step; bump the pin deliberately, never
+  # float `latest` through the step that signs provenance. --provenance is
+  # what enables attestation here (explicit flag, not OIDC auto-enable).
   publish:
     needs: smoke
     runs-on: ubuntu-latest
@@ -34,8 +40,7 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+      - run: npm install -g npm@^11.5.1
       - run: npm ci
       - run: npm run build --if-present
       - run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
