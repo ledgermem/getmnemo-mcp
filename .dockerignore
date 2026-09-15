@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+.git
+.github
+.worktrees
+.env
+.env.*
+!.env.example
+*.log
+*.tsbuildinfo
+.DS_Store
+.vscode
+.idea
+scripts
+src/**/*.test.ts
